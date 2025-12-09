@@ -1,0 +1,33 @@
+# Files and directories created by pub
+.dart_tool/
+.packages
+build/
+pubspec.lock
+
+# Conventional directory for build outputs
+*.dylib
+*.so
+*.dll
+*.a
+*.lib
+
+# Directory created by dartdoc
+doc/api/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Test coverage
+coverage/
+
+# Downloaded UnRAR archives
+*.tar.gz
+*.zip
+
+# Output directories
+output/
+
+# FVM Version Cache
+.fvm/

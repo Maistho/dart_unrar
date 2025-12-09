@@ -1,0 +1,2 @@
+This is a test file for unrar package.
+It contains some sample text for testing archive extraction.
