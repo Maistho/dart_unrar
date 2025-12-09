@@ -1,5 +1,15 @@
 /// Represents a single entry (file) in a RAR archive.
 class ArchiveEntry {
+
+  ArchiveEntry({
+    required this.name,
+    required this.size,
+    required this.packedSize,
+    required this.crc,
+    required this.attributes,
+    required this.modificationTime,
+    required this.isDirectory,
+  });
   /// The name of the file in the archive.
   final String name;
 
@@ -20,16 +30,6 @@ class ArchiveEntry {
 
   /// Whether this entry is a directory.
   final bool isDirectory;
-
-  ArchiveEntry({
-    required this.name,
-    required this.size,
-    required this.packedSize,
-    required this.crc,
-    required this.attributes,
-    required this.modificationTime,
-    required this.isDirectory,
-  });
 
   @override
   String toString() =>
