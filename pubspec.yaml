@@ -1,6 +1,6 @@
 name: unrar
 description: A Dart FFI package for extracting RAR archives using the official UnRAR library from RARLab.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/maistho/dart_unrar
 
 environment:
@@ -23,6 +23,7 @@ ffigen:
   name: UnrarBindings
   description: FFI bindings for UnRAR
   output: "lib/src/unrar_bindings.dart"
+  ffi-native:
   headers:
     entry-points:
       - "third_party/unrar/dll.hpp"

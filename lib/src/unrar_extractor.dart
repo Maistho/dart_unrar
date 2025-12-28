@@ -17,23 +17,11 @@ class UnrarExtractor {
     final possiblePaths = <String>[];
 
     if (Platform.isMacOS) {
-      possiblePaths.addAll([
-        '.dart_tool/lib/libunrar.dylib',
-        'libunrar.dylib',
-        '../.dart_tool/lib/libunrar.dylib',
-      ]);
+      possiblePaths.addAll(['.dart_tool/lib/libunrar.dylib', 'libunrar.dylib']);
     } else if (Platform.isLinux) {
-      possiblePaths.addAll([
-        '.dart_tool/lib/libunrar.so',
-        'libunrar.so',
-        '../.dart_tool/lib/libunrar.so',
-      ]);
+      possiblePaths.addAll(['.dart_tool/lib/libunrar.so', 'libunrar.so']);
     } else if (Platform.isWindows) {
-      possiblePaths.addAll([
-        '.dart_tool/lib/unrar.dll',
-        'unrar.dll',
-        '../.dart_tool/lib/unrar.dll',
-      ]);
+      possiblePaths.addAll(['.dart_tool/lib/unrar.dll', 'unrar.dll']);
     } else {
       throw UnsupportedError(
         'Unsupported platform: ${Platform.operatingSystem}',
@@ -51,36 +39,43 @@ class UnrarExtractor {
     }
 
     throw UnrarException(
-      'Failed to load native library. Please run "dart pub get" to build the library.',
+      'Failed to load native library. Please run "dart build" to build the library.',
     );
   }
 
   // FFI function signatures
   late final Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>)
-      _rarOpenArchive = _lib.lookupFunction<
-          Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>),
-          Pointer<Void> Function(
-              Pointer<bindings.RAROpenArchiveData>)>('RAROpenArchive');
+  _rarOpenArchive = _lib
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>),
+        Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>)
+      >('RAROpenArchive');
 
-  late final int Function(Pointer<Void>) _rarCloseArchive = _lib.lookupFunction<
-      Int32 Function(Pointer<Void>),
-      int Function(Pointer<Void>)>('RARCloseArchive');
+  late final int Function(Pointer<Void>) _rarCloseArchive = _lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('RARCloseArchive');
 
   late final int Function(Pointer<Void>, Pointer<bindings.RARHeaderData>)
-      _rarReadHeader = _lib.lookupFunction<
-          Int32 Function(Pointer<Void>, Pointer<bindings.RARHeaderData>),
-          int Function(
-              Pointer<Void>, Pointer<bindings.RARHeaderData>)>('RARReadHeader');
+  _rarReadHeader = _lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<bindings.RARHeaderData>),
+        int Function(Pointer<Void>, Pointer<bindings.RARHeaderData>)
+      >('RARReadHeader');
 
   late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)
-      _rarProcessFile = _lib.lookupFunction<
-          Int32 Function(Pointer<Void>, Int32, Pointer<Utf8>, Pointer<Utf8>),
-          int Function(Pointer<Void>, int, Pointer<Utf8>,
-              Pointer<Utf8>)>('RARProcessFile');
+  _rarProcessFile = _lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Int32, Pointer<Utf8>, Pointer<Utf8>),
+        int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)
+      >('RARProcessFile');
 
-  late final void Function(Pointer<Void>, Pointer<Utf8>) _rarSetPassword =
-      _lib.lookupFunction<Void Function(Pointer<Void>, Pointer<Utf8>),
-          void Function(Pointer<Void>, Pointer<Utf8>)>('RARSetPassword');
+  late final void Function(Pointer<Void>, Pointer<Utf8>) _rarSetPassword = _lib
+      .lookupFunction<
+        Void Function(Pointer<Void>, Pointer<Utf8>),
+        void Function(Pointer<Void>, Pointer<Utf8>)
+      >('RARSetPassword');
   // Constants from dll.hpp
   static const int ERAR_END_ARCHIVE = 10;
   static const int ERAR_NO_MEMORY = 11;
