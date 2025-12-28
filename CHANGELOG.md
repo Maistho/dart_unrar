@@ -1,3 +1,6 @@
+## 0.1.2
+- Fixed some linking issues
+
 ## 0.1.1
 - Updated to unrar 7.2.3
 - Some changes to how the dynamic lib is found

@@ -13,34 +13,104 @@ class UnrarExtractor {
   static DynamicLibrary get _lib {
     if (_dylib != null) return _dylib!;
 
-    // Try multiple paths to find the library
+    // Try multiple paths to find the library. This covers common layouts:
+    // - .dart_tool/lib next to the app
+    // - current working directory
+    // - alongside the executable
+    // - bundle layout: ../lib relative to the executable (dart compile exe)
+    // - directory of Platform.script (useful during tests)
+    // - override via UNRAR_LIBRARY_PATH env var
     final possiblePaths = <String>[];
-
-    if (Platform.isMacOS) {
-      possiblePaths.addAll(['.dart_tool/lib/libunrar.dylib', 'libunrar.dylib']);
-    } else if (Platform.isLinux) {
-      possiblePaths.addAll(['.dart_tool/lib/libunrar.so', 'libunrar.so']);
-    } else if (Platform.isWindows) {
-      possiblePaths.addAll(['.dart_tool/lib/unrar.dll', 'unrar.dll']);
-    } else {
-      throw UnsupportedError(
-        'Unsupported platform: ${Platform.operatingSystem}',
-      );
+    void addPath(String path) {
+      if (!possiblePaths.contains(path)) possiblePaths.add(path);
     }
 
-    // Try each path
+    final libName = _libraryFileName();
+
+    // Env override: exact file or directory
+    final envPath = Platform.environment['UNRAR_LIBRARY_PATH'];
+    if (envPath != null && envPath.isNotEmpty) {
+      final envAsDir = Directory(envPath);
+      addPath(envAsDir.existsSync() ? _join(envAsDir.path, libName) : envPath);
+    }
+
+    // Default working dir locations
+    addPath(_join('.dart_tool/lib', libName));
+    addPath(libName);
+
+    // Resolved executable (dart or compiled binary)
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    addPath(_join(exeDir, libName));
+    // Bundle layout: build/bundle/bin/<exe>, build/bundle/lib/<lib>
+    addPath(_join(_join(exeDir, '..'), _join('lib', libName)));
+
+    // Location of the running script (tests / `dart run`)
+    if (Platform.script.isScheme('file')) {
+      final scriptDir = File(Platform.script.toFilePath()).parent.path;
+      addPath(_join(scriptDir, libName));
+      addPath(_join(_join(scriptDir, '..'), _join('lib', libName)));
+    }
+
+    final attempted = <String>[];
+    final errors = <String>[];
     for (final path in possiblePaths) {
+      attempted.add(path);
       try {
         _dylib = DynamicLibrary.open(path);
         return _dylib!;
-      } catch (_) {
+      } catch (e) {
+        errors.add('$path => $e');
         // Try next path
       }
     }
 
-    throw UnrarException(
+    final debug = Platform.environment['UNRAR_DEBUG'] == '1';
+    final msg = StringBuffer(
       'Failed to load native library. Please run "dart build" to build the library.',
     );
+    if (debug) {
+      msg.writeln();
+      msg.writeln('Attempted paths:');
+      for (final p in attempted) {
+        final exists = File(p).existsSync();
+        msg.writeln('- $p ${exists ? '(exists)' : '(missing)'}');
+      }
+      if (errors.isNotEmpty) {
+        msg.writeln('dlopen errors:');
+        for (final err in errors) {
+          msg.writeln('- $err');
+        }
+      }
+      final envPath = Platform.environment['UNRAR_LIBRARY_PATH'];
+      if (envPath != null) {
+        msg.writeln('UNRAR_LIBRARY_PATH=$envPath');
+      }
+      msg.writeln(
+        'Executable dir: ${File(Platform.resolvedExecutable).parent.path}',
+      );
+      if (Platform.script.isScheme('file')) {
+        msg.writeln(
+          'Script dir: ${File(Platform.script.toFilePath()).parent.path}',
+        );
+      }
+    }
+    throw UnrarException(msg.toString());
+  }
+
+  static String _libraryFileName() {
+    if (Platform.isMacOS) return 'libunrar.dylib';
+    if (Platform.isLinux) return 'libunrar.so';
+    if (Platform.isWindows) return 'unrar.dll';
+    throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
+  }
+
+  static String _join(String base, String name) {
+    if (base.isEmpty) return name;
+    final sep = Platform.pathSeparator;
+    final normalizedBase = base.endsWith(sep)
+        ? base.substring(0, base.length - 1)
+        : base;
+    return '$normalizedBase$sep$name';
   }
 
   // FFI function signatures

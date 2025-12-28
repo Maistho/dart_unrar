@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:native_toolchain_c/native_toolchain_c.dart';
@@ -59,30 +60,42 @@ void main(List<String> args) async {
       'third_party/unrar/dll.cpp',
     ];
 
+    final flags = [
+      // Suppress dangling-else warnings
+      '-Wno-dangling-else',
+      // Suppress switch warnings for unhandled enum values
+      '-Wno-switch',
+      // Define RARDLL to build as a library
+      '-DRARDLL',
+      // Use C++11 standard which is required for the code
+      '-std=c++11',
+      // Add defines from makefile
+      '-D_FILE_OFFSET_BITS=64',
+      '-D_LARGEFILE_SOURCE',
+      '-DRAR_SMP',
+      // Add pthread for threading support
+      '-pthread',
+    ];
+
+    // Platform-specific flags
+    if (Platform.isLinux) {
+      // On Linux: link GNU libstdc++ and optionally static link runtime
+      flags.addAll([
+        '-lstdc++',
+        '-static-libstdc++',
+        '-static-libgcc',
+      ]);
+    } else if (Platform.isMacOS) {
+      // On macOS: explicitly link libc++ (clang's default C++ library)
+      flags.add('-lc++');
+    }
+    // On Windows: link the appropriate runtime via native_toolchain_c defaults
+
     final cBuilder = CBuilder.library(
       name: packageName,
       assetName: '$packageName.dart',
       sources: sources,
-      // Add necessary compiler and linker flags
-      cppLinkStdLib: 'c++',
-      flags: [
-        // Suppress dangling-else warnings
-        '-Wno-dangling-else',
-        // Suppress switch warnings for unhandled enum values
-        '-Wno-switch',
-        // Define RARDLL to build as a library
-        '-DRARDLL',
-        // Use C++11 standard which is required for the code
-        '-std=c++11',
-        // Add defines from makefile
-        '-D_FILE_OFFSET_BITS=64',
-        '-D_LARGEFILE_SOURCE',
-        '-DRAR_SMP',
-        // Add pthread for threading support
-        '-pthread',
-        // Explicitly link C++ standard library
-        '-lc++',
-      ],
+      flags: flags,
     );
 
     await cBuilder.run(

@@ -1,6 +1,6 @@
 name: unrar
 description: A Dart FFI package for extracting RAR archives using the official UnRAR library from RARLab.
-version: 0.1.1
+version: 0.1.2
 repository: https://github.com/maistho/dart_unrar
 
 environment:
