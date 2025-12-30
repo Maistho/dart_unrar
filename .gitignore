@@ -31,3 +31,7 @@ output/
 
 # FVM Version Cache
 .fvm/
+
+# WASM build artifacts
+lib/src/wasm/unrar.js
+lib/src/wasm/unrar.wasm
