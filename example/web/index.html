@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UnRAR Web Example</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .upload-area:hover {
+            border-color: #666;
+            background: #fafafa;
+        }
+        .upload-area.dragover {
+            border-color: #4CAF50;
+            background: #e8f5e9;
+        }
+        #fileInput {
+            display: none;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .error {
+            color: #d32f2f;
+            background: #ffebee;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success {
+            color: #388e3c;
+            background: #e8f5e9;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .warning {
+            color: #f57c00;
+            background: #fff3e0;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .file-list {
+            list-style: none;
+            padding: 0;
+        }
+        .file-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-item:hover {
+            background: #f5f5f5;
+        }
+        .file-name {
+            font-weight: 500;
+        }
+        .file-size {
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🗜️ UnRAR Web Example</h1>
+        
+        <div class="warning">
+            <strong>Note:</strong> Web support is experimental. The WASM module must be built using Emscripten first.
+            See <a href="https://github.com/Maistho/dart_unrar/blob/main/WEB_SUPPORT.md">WEB_SUPPORT.md</a> for details.
+        </div>
+
+        <div class="upload-area" id="uploadArea">
+            <p>📁 Click or drag a RAR file here to upload</p>
+            <input type="file" id="fileInput" accept=".rar">
+        </div>
+
+        <div id="controls" style="display: none;">
+            <button id="listBtn">List Files</button>
+            <button id="extractBtn">Extract All</button>
+            <button id="testBtn">Test Archive</button>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script src="main.dart.js" defer></script>
+</body>
+</html>
