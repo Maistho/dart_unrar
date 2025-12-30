@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 import 'archive_entry.dart';
 import 'unrar_exception.dart';
+import 'unrar_constants.dart';
 
 /// Web implementation of UnrarExtractor using WebAssembly
 /// 
@@ -13,6 +14,12 @@ class UnrarExtractor {
   static JSObject? _module;
   static bool _initialized = false;
   static Completer<void>? _initCompleter;
+  
+  // Message shown when implementation is incomplete
+  static const String _unimplementedMessage =
+      'Web support for UnRAR is not yet fully implemented. '
+      'The WASM module has been prepared but the bindings need to be completed. '
+      'See WEB_SUPPORT.md for implementation details.';
 
   /// Initialize the WASM module
   Future<void> _ensureInitialized() async {
@@ -31,22 +38,30 @@ class UnrarExtractor {
       script.src = 'packages/unrar/src/wasm/unrar.js';
       
       final loadCompleter = Completer<void>();
-      script.onload = ((web.Event event) {
+      script.addEventListener('load', ((web.Event event) {
         loadCompleter.complete();
-      }).toJS;
+      }).toJS);
       
-      script.onerror = ((web.Event event) {
+      script.addEventListener('error', ((web.Event event) {
         loadCompleter.completeError(
           UnrarException('Failed to load WASM module'),
         );
-      }).toJS;
+      }).toJS);
       
       web.document.head!.appendChild(script);
       await loadCompleter.future;
       
       // Initialize the module
       // This calls the createUnrarModule function exported by Emscripten
-      final createModule = web.window.getProperty('createUnrarModule'.toJS) as JSFunction;
+      final moduleGetter = web.window['createUnrarModule'.toJS];
+      if (moduleGetter == null) {
+        throw UnrarException(
+          'createUnrarModule function not found. '
+          'Make sure the WASM module is built correctly.',
+        );
+      }
+      
+      final createModule = moduleGetter as JSFunction;
       _module = await (createModule.callAsFunction() as JSPromise).toDart as JSObject;
       
       _initialized = true;
@@ -58,32 +73,6 @@ class UnrarExtractor {
     }
   }
 
-  // Constants from dll.hpp (same as FFI version)
-  static const int ERAR_SUCCESS = 0;
-  static const int ERAR_END_ARCHIVE = 10;
-  static const int ERAR_NO_MEMORY = 11;
-  static const int ERAR_BAD_DATA = 12;
-  static const int ERAR_BAD_ARCHIVE = 13;
-  static const int ERAR_UNKNOWN_FORMAT = 14;
-  static const int ERAR_EOPEN = 15;
-  static const int ERAR_ECREATE = 16;
-  static const int ERAR_ECLOSE = 17;
-  static const int ERAR_EREAD = 18;
-  static const int ERAR_EWRITE = 19;
-  static const int ERAR_SMALL_BUF = 20;
-  static const int ERAR_UNKNOWN = 21;
-  static const int ERAR_MISSING_PASSWORD = 22;
-
-  static const int RAR_OM_LIST = 0;
-  static const int RAR_OM_EXTRACT = 1;
-  static const int RAR_OM_LIST_INCSPLIT = 2;
-
-  static const int RAR_SKIP = 0;
-  static const int RAR_TEST = 1;
-  static const int RAR_EXTRACT = 2;
-
-  static const int RHDF_DIRECTORY = 0x20;
-
   /// Lists all files in a RAR archive.
   ///
   /// Returns a list of [ArchiveEntry] objects representing each file.
@@ -93,12 +82,7 @@ class UnrarExtractor {
   /// Use the file loading utilities to load files into the VFS first.
   Future<List<ArchiveEntry>> listFiles(String archivePath) async {
     await _ensureInitialized();
-    
-    throw UnimplementedError(
-      'Web support for UnRAR is not yet fully implemented. '
-      'The WASM module has been prepared but the bindings need to be completed. '
-      'See WEB_SUPPORT.md for implementation details.',
-    );
+    throw UnimplementedError(_unimplementedMessage);
   }
 
   /// Extracts all files from a RAR archive to the specified output directory.
@@ -117,12 +101,7 @@ class UnrarExtractor {
     String? password,
   }) async {
     await _ensureInitialized();
-    
-    throw UnimplementedError(
-      'Web support for UnRAR is not yet fully implemented. '
-      'The WASM module has been prepared but the bindings need to be completed. '
-      'See WEB_SUPPORT.md for implementation details.',
-    );
+    throw UnimplementedError(_unimplementedMessage);
   }
 
   /// Extracts a single file from a RAR archive and returns its contents.
@@ -139,12 +118,7 @@ class UnrarExtractor {
     String? password,
   }) async {
     await _ensureInitialized();
-    
-    throw UnimplementedError(
-      'Web support for UnRAR is not yet fully implemented. '
-      'The WASM module has been prepared but the bindings need to be completed. '
-      'See WEB_SUPPORT.md for implementation details.',
-    );
+    throw UnimplementedError(_unimplementedMessage);
   }
 
   /// Tests a RAR archive for integrity.
@@ -153,41 +127,6 @@ class UnrarExtractor {
   /// Throws [UnrarException] if the archive is corrupted or cannot be opened.
   Future<bool> testArchive(String archivePath, {String? password}) async {
     await _ensureInitialized();
-    
-    throw UnimplementedError(
-      'Web support for UnRAR is not yet fully implemented. '
-      'The WASM module has been prepared but the bindings need to be completed. '
-      'See WEB_SUPPORT.md for implementation details.',
-    );
-  }
-
-  String _getErrorMessage(int errorCode) {
-    switch (errorCode) {
-      case ERAR_NO_MEMORY:
-        return 'Not enough memory';
-      case ERAR_BAD_DATA:
-        return 'Archive header or data is broken';
-      case ERAR_BAD_ARCHIVE:
-        return 'File is not a valid RAR archive';
-      case ERAR_UNKNOWN_FORMAT:
-        return 'Unknown archive format';
-      case ERAR_EOPEN:
-        return 'Cannot open file';
-      case ERAR_ECREATE:
-        return 'Cannot create file';
-      case ERAR_ECLOSE:
-        return 'Cannot close file';
-      case ERAR_EREAD:
-        return 'Read error';
-      case ERAR_EWRITE:
-        return 'Write error';
-      case ERAR_SMALL_BUF:
-        return 'Buffer too small';
-      case ERAR_MISSING_PASSWORD:
-        return 'Password required';
-      case ERAR_UNKNOWN:
-      default:
-        return 'Unknown error';
-    }
+    throw UnimplementedError(_unimplementedMessage);
   }
 }

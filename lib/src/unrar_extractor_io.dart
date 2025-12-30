@@ -5,6 +5,7 @@ import 'package:ffi/ffi.dart';
 import 'unrar_exception.dart';
 import 'archive_entry.dart';
 import 'unrar_bindings.dart' as bindings;
+import 'unrar_constants.dart';
 
 /// High-level interface for extracting RAR archives.
 class UnrarExtractor {
@@ -146,28 +147,6 @@ class UnrarExtractor {
         Void Function(Pointer<Void>, Pointer<Utf8>),
         void Function(Pointer<Void>, Pointer<Utf8>)
       >('RARSetPassword');
-  // Constants from dll.hpp
-  static const int ERAR_END_ARCHIVE = 10;
-  static const int ERAR_NO_MEMORY = 11;
-  static const int ERAR_BAD_DATA = 12;
-  static const int ERAR_BAD_ARCHIVE = 13;
-  static const int ERAR_UNKNOWN_FORMAT = 14;
-  static const int ERAR_EOPEN = 15;
-  static const int ERAR_ECREATE = 16;
-  static const int ERAR_ECLOSE = 17;
-  static const int ERAR_EREAD = 18;
-  static const int ERAR_EWRITE = 19;
-  static const int ERAR_SMALL_BUF = 20;
-  static const int ERAR_UNKNOWN = 21;
-  static const int ERAR_MISSING_PASSWORD = 22;
-
-  static const int RAR_OM_LIST = 0;
-  static const int RAR_OM_EXTRACT = 1;
-  static const int RAR_OM_LIST_INCSPLIT = 2;
-
-  static const int RAR_SKIP = 0;
-  static const int RAR_TEST = 1;
-  static const int RAR_EXTRACT = 2;
 
   // RARHeaderDataEx structure size and offsets
   static const int HEADER_SIZE = 560;
@@ -184,14 +163,14 @@ class UnrarExtractor {
       final archiveNamePtr = archivePath.toNativeUtf8();
       try {
         archiveData.ref.ArcName = archiveNamePtr.cast();
-        archiveData.ref.OpenMode = bindings.RAR_OM_LIST;
+        archiveData.ref.OpenMode = RAR_OM_LIST;
         archiveData.ref.CmtBuf = nullptr;
         archiveData.ref.CmtBufSize = 0;
 
         final handle = _rarOpenArchive(archiveData);
-        if (archiveData.ref.OpenResult != bindings.ERAR_SUCCESS) {
+        if (archiveData.ref.OpenResult != ERAR_SUCCESS) {
           throw UnrarException(
-            _getErrorMessage(archiveData.ref.OpenResult),
+            getErrorMessage(archiveData.ref.OpenResult),
             archiveData.ref.OpenResult,
           );
         }
@@ -201,9 +180,9 @@ class UnrarExtractor {
           try {
             while (true) {
               final result = _rarReadHeader(handle, headerData);
-              if (result == bindings.ERAR_END_ARCHIVE) break;
-              if (result != bindings.ERAR_SUCCESS) {
-                throw UnrarException(_getErrorMessage(result), result);
+              if (result == ERAR_END_ARCHIVE) break;
+              if (result != ERAR_SUCCESS) {
+                throw UnrarException(getErrorMessage(result), result);
               }
 
               final fileNameChars = <int>[];
@@ -214,7 +193,7 @@ class UnrarExtractor {
               }
               final fileNameStr = String.fromCharCodes(fileNameChars);
               final isDirectory =
-                  (headerData.ref.Flags & bindings.RHDF_DIRECTORY) != 0;
+                  (headerData.ref.Flags & RHDF_DIRECTORY) != 0;
 
               final unixTime = headerData.ref.FileTime;
               final modTime = DateTime.fromMillisecondsSinceEpoch(
@@ -237,13 +216,13 @@ class UnrarExtractor {
               // Skip to next file
               final processResult = _rarProcessFile(
                 handle,
-                bindings.RAR_SKIP,
+                RAR_SKIP,
                 nullptr,
                 nullptr,
               );
-              if (processResult != bindings.ERAR_SUCCESS) {
+              if (processResult != ERAR_SUCCESS) {
                 throw UnrarException(
-                  _getErrorMessage(processResult),
+                  getErrorMessage(processResult),
                   processResult,
                 );
               }
@@ -278,14 +257,14 @@ class UnrarExtractor {
       final archiveNamePtr = archivePath.toNativeUtf8();
       try {
         archiveData.ref.ArcName = archiveNamePtr.cast();
-        archiveData.ref.OpenMode = bindings.RAR_OM_EXTRACT;
+        archiveData.ref.OpenMode = RAR_OM_EXTRACT;
         archiveData.ref.CmtBuf = nullptr;
         archiveData.ref.CmtBufSize = 0;
 
         final handle = _rarOpenArchive(archiveData);
-        if (archiveData.ref.OpenResult != bindings.ERAR_SUCCESS) {
+        if (archiveData.ref.OpenResult != ERAR_SUCCESS) {
           throw UnrarException(
-            _getErrorMessage(archiveData.ref.OpenResult),
+            getErrorMessage(archiveData.ref.OpenResult),
             archiveData.ref.OpenResult,
           );
         }
@@ -305,20 +284,20 @@ class UnrarExtractor {
           try {
             while (true) {
               final result = _rarReadHeader(handle, headerData);
-              if (result == bindings.ERAR_END_ARCHIVE) break;
-              if (result != bindings.ERAR_SUCCESS) {
-                throw UnrarException(_getErrorMessage(result), result);
+              if (result == ERAR_END_ARCHIVE) break;
+              if (result != ERAR_SUCCESS) {
+                throw UnrarException(getErrorMessage(result), result);
               }
 
               final processResult = _rarProcessFile(
                 handle,
-                bindings.RAR_EXTRACT,
+                RAR_EXTRACT,
                 destPathPtr,
                 nullptr,
               );
-              if (processResult != bindings.ERAR_SUCCESS) {
+              if (processResult != ERAR_SUCCESS) {
                 throw UnrarException(
-                  _getErrorMessage(processResult),
+                  getErrorMessage(processResult),
                   processResult,
                 );
               }
@@ -360,14 +339,14 @@ class UnrarExtractor {
         final archiveNamePtr = archivePath.toNativeUtf8();
         try {
           archiveData.ref.ArcName = archiveNamePtr.cast();
-          archiveData.ref.OpenMode = bindings.RAR_OM_EXTRACT;
+          archiveData.ref.OpenMode = RAR_OM_EXTRACT;
           archiveData.ref.CmtBuf = nullptr;
           archiveData.ref.CmtBufSize = 0;
 
           final handle = _rarOpenArchive(archiveData);
-          if (archiveData.ref.OpenResult != bindings.ERAR_SUCCESS) {
+          if (archiveData.ref.OpenResult != ERAR_SUCCESS) {
             throw UnrarException(
-              _getErrorMessage(archiveData.ref.OpenResult),
+              getErrorMessage(archiveData.ref.OpenResult),
               archiveData.ref.OpenResult,
             );
           }
@@ -388,9 +367,9 @@ class UnrarExtractor {
               var found = false;
               while (true) {
                 final result = _rarReadHeader(handle, headerData);
-                if (result == bindings.ERAR_END_ARCHIVE) break;
-                if (result != bindings.ERAR_SUCCESS) {
-                  throw UnrarException(_getErrorMessage(result), result);
+                if (result == ERAR_END_ARCHIVE) break;
+                if (result != ERAR_SUCCESS) {
+                  throw UnrarException(getErrorMessage(result), result);
                 }
 
                 final fileNameChars = <int>[];
@@ -405,13 +384,13 @@ class UnrarExtractor {
                   found = true;
                   final processResult = _rarProcessFile(
                     handle,
-                    bindings.RAR_EXTRACT,
+                    RAR_EXTRACT,
                     destPathPtr,
                     nullptr,
                   );
-                  if (processResult != bindings.ERAR_SUCCESS) {
+                  if (processResult != ERAR_SUCCESS) {
                     throw UnrarException(
-                      _getErrorMessage(processResult),
+                      getErrorMessage(processResult),
                       processResult,
                     );
                   }
@@ -419,13 +398,13 @@ class UnrarExtractor {
                 } else {
                   final processResult = _rarProcessFile(
                     handle,
-                    bindings.RAR_SKIP,
+                    RAR_SKIP,
                     nullptr,
                     nullptr,
                   );
-                  if (processResult != bindings.ERAR_SUCCESS) {
+                  if (processResult != ERAR_SUCCESS) {
                     throw UnrarException(
-                      _getErrorMessage(processResult),
+                      getErrorMessage(processResult),
                       processResult,
                     );
                   }
@@ -471,14 +450,14 @@ class UnrarExtractor {
       final archiveNamePtr = archivePath.toNativeUtf8();
       try {
         archiveData.ref.ArcName = archiveNamePtr.cast();
-        archiveData.ref.OpenMode = bindings.RAR_OM_EXTRACT;
+        archiveData.ref.OpenMode = RAR_OM_EXTRACT;
         archiveData.ref.CmtBuf = nullptr;
         archiveData.ref.CmtBufSize = 0;
 
         final handle = _rarOpenArchive(archiveData);
-        if (archiveData.ref.OpenResult != bindings.ERAR_SUCCESS) {
+        if (archiveData.ref.OpenResult != ERAR_SUCCESS) {
           throw UnrarException(
-            _getErrorMessage(archiveData.ref.OpenResult),
+            getErrorMessage(archiveData.ref.OpenResult),
             archiveData.ref.OpenResult,
           );
         }
@@ -497,20 +476,20 @@ class UnrarExtractor {
           try {
             while (true) {
               final result = _rarReadHeader(handle, headerData);
-              if (result == bindings.ERAR_END_ARCHIVE) break;
-              if (result != bindings.ERAR_SUCCESS) {
-                throw UnrarException(_getErrorMessage(result), result);
+              if (result == ERAR_END_ARCHIVE) break;
+              if (result != ERAR_SUCCESS) {
+                throw UnrarException(getErrorMessage(result), result);
               }
 
               final processResult = _rarProcessFile(
                 handle,
-                bindings.RAR_TEST,
+                RAR_TEST,
                 nullptr,
                 nullptr,
               );
-              if (processResult != bindings.ERAR_SUCCESS) {
+              if (processResult != ERAR_SUCCESS) {
                 throw UnrarException(
-                  _getErrorMessage(processResult),
+                  getErrorMessage(processResult),
                   processResult,
                 );
               }
@@ -529,35 +508,5 @@ class UnrarExtractor {
     }
 
     return true;
-  }
-
-  String _getErrorMessage(int errorCode) {
-    switch (errorCode) {
-      case ERAR_NO_MEMORY:
-        return 'Not enough memory';
-      case ERAR_BAD_DATA:
-        return 'Archive header or data is broken';
-      case ERAR_BAD_ARCHIVE:
-        return 'File is not a valid RAR archive';
-      case ERAR_UNKNOWN_FORMAT:
-        return 'Unknown archive format';
-      case ERAR_EOPEN:
-        return 'Cannot open file';
-      case ERAR_ECREATE:
-        return 'Cannot create file';
-      case ERAR_ECLOSE:
-        return 'Cannot close file';
-      case ERAR_EREAD:
-        return 'Read error';
-      case ERAR_EWRITE:
-        return 'Write error';
-      case ERAR_SMALL_BUF:
-        return 'Buffer too small';
-      case ERAR_MISSING_PASSWORD:
-        return 'Password required';
-      case ERAR_UNKNOWN:
-      default:
-        return 'Unknown error';
-    }
   }
 }
