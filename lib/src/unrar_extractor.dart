@@ -44,6 +44,12 @@ class UnrarExtractor {
     // Bundle layout: build/bundle/bin/<exe>, build/bundle/lib/<lib>
     addPath(_join(_join(exeDir, '..'), _join('lib', libName)));
 
+    // macOS app bundle: Contents/Frameworks/unrar.framework/unrar
+    if (Platform.isMacOS) {
+      final frameworksDir = _join(File(exeDir).parent.path, 'Frameworks');
+      addPath(_join(frameworksDir, 'unrar.framework', 'unrar'));
+    }
+
     // Location of the running script (tests / `dart run`)
     if (Platform.script.isScheme('file')) {
       final scriptDir = File(Platform.script.toFilePath()).parent.path;
@@ -65,12 +71,12 @@ class UnrarExtractor {
     }
 
     final debug = Platform.environment['UNRAR_DEBUG'] == '1';
+    final attemptedPaths = possiblePaths.join(', ');
     final msg = StringBuffer(
-      'Failed to load native library. Please run "dart build" to build the library.',
+      'Failed to load native unrar library. Attempted paths: $attemptedPaths',
     );
     if (debug) {
       msg.writeln();
-      msg.writeln('Attempted paths:');
       for (final p in attempted) {
         final exists = File(p).existsSync();
         msg.writeln('- $p ${exists ? '(exists)' : '(missing)'}');
@@ -104,13 +110,17 @@ class UnrarExtractor {
     throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
   }
 
-  static String _join(String base, String name) {
+  static String _join(String base, String name, [String? third]) {
     if (base.isEmpty) return name;
     final sep = Platform.pathSeparator;
     final normalizedBase = base.endsWith(sep)
         ? base.substring(0, base.length - 1)
         : base;
-    return '$normalizedBase$sep$name';
+    final joined = '$normalizedBase$sep$name';
+    if (third != null) {
+      return '$joined$sep$third';
+    }
+    return joined;
   }
 
   // FFI function signatures

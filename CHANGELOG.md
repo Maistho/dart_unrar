@@ -1,3 +1,8 @@
+## 0.1.3
+- Added macOS app bundle Framework path to native library search
+- Improved error message to list all attempted library paths
+- Extended `_join()` helper to support three-component paths
+
 ## 0.1.2
 - Fixed some linking issues
 
