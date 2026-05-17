@@ -6,6 +6,53 @@ import 'unrar_exception.dart';
 import 'archive_entry.dart';
 import 'unrar_bindings.dart' as bindings;
 
+final _pendingData = <int, _Buffer>{};
+int _nextId = 0;
+
+class _Buffer {
+  final List<int> _data;
+  int _offset = 0;
+  final bool _isFixed;
+
+  _Buffer.fixed(int size)
+      : _data = List<int>.filled(size, 0),
+        _isFixed = true;
+
+  _Buffer() : _data = <int>[], _isFixed = false;
+
+  void addChunk(List<int> chunk) {
+    final end = _offset + chunk.length;
+    if (_isFixed && end <= _data.length) {
+      _data.setRange(_offset, end, chunk);
+      _offset = end;
+    } else {
+      _data.addAll(chunk);
+      _offset = _data.length;
+    }
+  }
+
+  Uint8List toBytes() {
+    if (_offset == 0) return Uint8List(0);
+    return Uint8List.fromList(
+      _offset == _data.length ? _data : _data.sublist(0, _offset),
+    );
+  }
+}
+
+int _unrarCallback(int msg, int userData, int p1, int p2) {
+  if (msg == bindings.UNRARCALLBACK_MESSAGES.UCM_PROCESSDATA.value) {
+    final buf = _pendingData[userData];
+    if (buf != null) {
+      final ptr = Pointer<Uint8>.fromAddress(p1);
+      buf.addChunk(ptr.asTypedList(p2));
+    }
+  }
+  return 0;
+}
+
+final _nativeCallback =
+    Pointer.fromFunction<bindings.UNRARCALLBACKFunction>(_unrarCallback, 0);
+
 /// High-level interface for extracting RAR archives.
 class UnrarExtractor {
   static DynamicLibrary? _dylib;
@@ -156,6 +203,12 @@ class UnrarExtractor {
         Void Function(Pointer<Void>, Pointer<Utf8>),
         void Function(Pointer<Void>, Pointer<Utf8>)
       >('RARSetPassword');
+
+  late final void Function(Pointer<Void>, bindings.UNRARCALLBACK, int)
+      _rarSetCallback = _lib.lookupFunction<
+        Void Function(Pointer<Void>, bindings.UNRARCALLBACK, Int64),
+        void Function(Pointer<Void>, bindings.UNRARCALLBACK, int)
+      >('RARSetCallback');
   // Constants from dll.hpp
   static const int ERAR_END_ARCHIVE = 10;
   static const int ERAR_NO_MEMORY = 11;
@@ -467,6 +520,234 @@ class UnrarExtractor {
       }
     } finally {
       tempDir.deleteSync(recursive: true);
+    }
+  }
+
+  /// Extracts a single file from a RAR archive directly to memory.
+  ///
+  /// [archivePath]: Path to the RAR archive file.
+  /// [fileName]: Name of the file to extract from the archive.
+  /// [password]: Optional password for encrypted archives.
+  ///
+  /// Returns the file contents as a [Uint8List] without writing to disk.
+  /// Throws [UnrarException] if the file is not found or extraction fails.
+  Uint8List extractFileToMemory(
+    String archivePath,
+    String fileName, {
+    String? password,
+  }) {
+    final id = _nextId++;
+
+    final archiveData = calloc<bindings.RAROpenArchiveData>();
+    try {
+      final archiveNamePtr = archivePath.toNativeUtf8();
+      try {
+        archiveData.ref.ArcName = archiveNamePtr.cast();
+        archiveData.ref.OpenMode = bindings.RAR_OM_EXTRACT;
+        archiveData.ref.CmtBuf = nullptr;
+        archiveData.ref.CmtBufSize = 0;
+
+        final handle = _rarOpenArchive(archiveData);
+        if (archiveData.ref.OpenResult != bindings.ERAR_SUCCESS) {
+          throw UnrarException(
+            _getErrorMessage(archiveData.ref.OpenResult),
+            archiveData.ref.OpenResult,
+          );
+        }
+
+        try {
+          if (password != null) {
+            final passwordPtr = password.toNativeUtf8();
+            try {
+              _rarSetPassword(handle, passwordPtr);
+            } finally {
+              calloc.free(passwordPtr);
+            }
+          }
+
+          _rarSetCallback(handle, _nativeCallback, id);
+
+          final headerData = calloc<bindings.RARHeaderData>();
+          try {
+            while (true) {
+              final result = _rarReadHeader(handle, headerData);
+              if (result == bindings.ERAR_END_ARCHIVE) break;
+              if (result != bindings.ERAR_SUCCESS) {
+                throw UnrarException(_getErrorMessage(result), result);
+              }
+
+              final fileNameChars = <int>[];
+              for (var i = 0; i < 260; i++) {
+                final char = headerData.ref.FileName[i];
+                if (char == 0) break;
+                fileNameChars.add(char);
+              }
+              final currentFileName = String.fromCharCodes(fileNameChars);
+
+              if (currentFileName == fileName) {
+                final unpSize = headerData.ref.UnpSize;
+                _pendingData[id] = unpSize > 0
+                    ? _Buffer.fixed(unpSize)
+                    : _Buffer();
+
+                final processResult = _rarProcessFile(
+                  handle,
+                  bindings.RAR_EXTRACT,
+                  nullptr,
+                  nullptr,
+                );
+                if (processResult != bindings.ERAR_SUCCESS) {
+                  _pendingData.remove(id);
+                  throw UnrarException(
+                    _getErrorMessage(processResult),
+                    processResult,
+                  );
+                }
+                final resultData = _pendingData[id]!.toBytes();
+                _pendingData.remove(id);
+                return resultData;
+              } else {
+                final processResult = _rarProcessFile(
+                  handle,
+                  bindings.RAR_SKIP,
+                  nullptr,
+                  nullptr,
+                );
+                if (processResult != bindings.ERAR_SUCCESS) {
+                  throw UnrarException(
+                    _getErrorMessage(processResult),
+                    processResult,
+                  );
+                }
+              }
+            }
+            _pendingData.remove(id);
+            throw UnrarException('File not found in archive: $fileName');
+          } finally {
+            calloc.free(headerData);
+          }
+        } finally {
+          _rarCloseArchive(handle);
+        }
+      } finally {
+        calloc.free(archiveNamePtr);
+      }
+    } finally {
+      calloc.free(archiveData);
+    }
+  }
+
+  /// Extracts all files from a RAR archive directly to memory.
+  ///
+  /// [archivePath]: Path to the RAR archive file.
+  /// [password]: Optional password for encrypted archives.
+  ///
+  /// Returns a map of filenames to their decompressed contents as [Uint8List],
+  /// without writing any files to disk.
+  /// Throws [UnrarException] if extraction fails.
+  Map<String, Uint8List> extractAllToMemory(
+    String archivePath, {
+    String? password,
+  }) {
+    final id = _nextId++;
+
+    final archiveData = calloc<bindings.RAROpenArchiveData>();
+    try {
+      final archiveNamePtr = archivePath.toNativeUtf8();
+      try {
+        archiveData.ref.ArcName = archiveNamePtr.cast();
+        archiveData.ref.OpenMode = bindings.RAR_OM_EXTRACT;
+        archiveData.ref.CmtBuf = nullptr;
+        archiveData.ref.CmtBufSize = 0;
+
+        final handle = _rarOpenArchive(archiveData);
+        if (archiveData.ref.OpenResult != bindings.ERAR_SUCCESS) {
+          throw UnrarException(
+            _getErrorMessage(archiveData.ref.OpenResult),
+            archiveData.ref.OpenResult,
+          );
+        }
+
+        try {
+          if (password != null) {
+            final passwordPtr = password.toNativeUtf8();
+            try {
+              _rarSetPassword(handle, passwordPtr);
+            } finally {
+              calloc.free(passwordPtr);
+            }
+          }
+
+          _rarSetCallback(handle, _nativeCallback, id);
+
+          final headerData = calloc<bindings.RARHeaderData>();
+          try {
+            final results = <String, Uint8List>{};
+            while (true) {
+              final result = _rarReadHeader(handle, headerData);
+              if (result == bindings.ERAR_END_ARCHIVE) break;
+              if (result != bindings.ERAR_SUCCESS) {
+                throw UnrarException(_getErrorMessage(result), result);
+              }
+
+              final fileNameChars = <int>[];
+              for (var i = 0; i < 260; i++) {
+                final char = headerData.ref.FileName[i];
+                if (char == 0) break;
+                fileNameChars.add(char);
+              }
+              final currentFileName = String.fromCharCodes(fileNameChars);
+              final isDirectory =
+                  (headerData.ref.Flags & bindings.RHDF_DIRECTORY) != 0;
+
+              if (isDirectory) {
+                final processResult = _rarProcessFile(
+                  handle,
+                  bindings.RAR_SKIP,
+                  nullptr,
+                  nullptr,
+                );
+                if (processResult != bindings.ERAR_SUCCESS) {
+                  throw UnrarException(
+                    _getErrorMessage(processResult),
+                    processResult,
+                  );
+                }
+              } else {
+                final unpSize = headerData.ref.UnpSize;
+                _pendingData[id] = unpSize > 0
+                    ? _Buffer.fixed(unpSize)
+                    : _Buffer();
+
+                final processResult = _rarProcessFile(
+                  handle,
+                  bindings.RAR_EXTRACT,
+                  nullptr,
+                  nullptr,
+                );
+                if (processResult != bindings.ERAR_SUCCESS) {
+                  _pendingData.remove(id);
+                  throw UnrarException(
+                    _getErrorMessage(processResult),
+                    processResult,
+                  );
+                }
+                results[currentFileName] = _pendingData[id]!.toBytes();
+              }
+            }
+            _pendingData.remove(id);
+            return results;
+          } finally {
+            calloc.free(headerData);
+          }
+        } finally {
+          _rarCloseArchive(handle);
+        }
+      } finally {
+        calloc.free(archiveNamePtr);
+      }
+    } finally {
+      calloc.free(archiveData);
     }
   }
 
