@@ -73,7 +73,7 @@ class UnrarExtractor {
     final debug = Platform.environment['UNRAR_DEBUG'] == '1';
     final attemptedPaths = possiblePaths.join(', ');
     final msg = StringBuffer(
-      'Failed to load native unrar library. Attempted paths: $attemptedPaths',
+      'Failed to load native unrar library. Please run "dart build" to build the library. Attempted paths: $attemptedPaths',
     );
     if (debug) {
       msg.writeln();
