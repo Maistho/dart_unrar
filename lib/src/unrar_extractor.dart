@@ -592,7 +592,7 @@ class UnrarExtractor {
 
                 final processResult = _rarProcessFile(
                   handle,
-                  bindings.RAR_EXTRACT,
+                  bindings.RAR_TEST,
                   nullptr,
                   nullptr,
                 );
@@ -721,7 +721,7 @@ class UnrarExtractor {
 
                 final processResult = _rarProcessFile(
                   handle,
-                  bindings.RAR_EXTRACT,
+                  bindings.RAR_TEST,
                   nullptr,
                   nullptr,
                 );
