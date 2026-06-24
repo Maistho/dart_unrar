@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -15,7 +16,7 @@ class _Buffer {
   final bool _isFixed;
 
   _Buffer.fixed(int size)
-      : _data = List<int>.filled(size, 0),
+      : _data = List<int>.filled(size, 0, growable: true),
         _isFixed = true;
 
   _Buffer() : _data = <int>[], _isFixed = false;
@@ -232,8 +233,15 @@ class UnrarExtractor {
   static const int RAR_TEST = 1;
   static const int RAR_EXTRACT = 2;
 
-  // RARHeaderDataEx structure size and offsets
-  static const int HEADER_SIZE = 560;
+  static String _readFileName(Pointer<bindings.RARHeaderData> headerData) {
+    final chars = <int>[];
+    for (var i = 0; i < 260; i++) {
+      final c = headerData.ref.FileName[i];
+      if (c == 0) break;
+      chars.add(c);
+    }
+    return utf8.decode(chars, allowMalformed: true);
+  }
 
   /// Lists all files in a RAR archive.
   ///
@@ -269,13 +277,7 @@ class UnrarExtractor {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final fileNameChars = <int>[];
-              for (var i = 0; i < 260; i++) {
-                final char = headerData.ref.FileName[i];
-                if (char == 0) break;
-                fileNameChars.add(char);
-              }
-              final fileNameStr = String.fromCharCodes(fileNameChars);
+              final fileNameStr = _readFileName(headerData);
               final isDirectory =
                   (headerData.ref.Flags & bindings.RHDF_DIRECTORY) != 0;
 
@@ -456,13 +458,7 @@ class UnrarExtractor {
                   throw UnrarException(_getErrorMessage(result), result);
                 }
 
-                final fileNameChars = <int>[];
-                for (var i = 0; i < 260; i++) {
-                  final char = headerData.ref.FileName[i];
-                  if (char == 0) break;
-                  fileNameChars.add(char);
-                }
-                final currentFileName = String.fromCharCodes(fileNameChars);
+                final currentFileName = _readFileName(headerData);
 
                 if (currentFileName == fileName) {
                   found = true;
@@ -576,13 +572,7 @@ class UnrarExtractor {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final fileNameChars = <int>[];
-              for (var i = 0; i < 260; i++) {
-                final char = headerData.ref.FileName[i];
-                if (char == 0) break;
-                fileNameChars.add(char);
-              }
-              final currentFileName = String.fromCharCodes(fileNameChars);
+              final currentFileName = _readFileName(headerData);
 
               if (currentFileName == fileName) {
                 final unpSize = headerData.ref.UnpSize;
@@ -633,6 +623,7 @@ class UnrarExtractor {
         calloc.free(archiveNamePtr);
       }
     } finally {
+      _pendingData.remove(id);
       calloc.free(archiveData);
     }
   }
@@ -690,13 +681,7 @@ class UnrarExtractor {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final fileNameChars = <int>[];
-              for (var i = 0; i < 260; i++) {
-                final char = headerData.ref.FileName[i];
-                if (char == 0) break;
-                fileNameChars.add(char);
-              }
-              final currentFileName = String.fromCharCodes(fileNameChars);
+              final currentFileName = _readFileName(headerData);
               final isDirectory =
                   (headerData.ref.Flags & bindings.RHDF_DIRECTORY) != 0;
 
@@ -747,6 +732,7 @@ class UnrarExtractor {
         calloc.free(archiveNamePtr);
       }
     } finally {
+      _pendingData.remove(id);
       calloc.free(archiveData);
     }
   }
@@ -846,6 +832,12 @@ class UnrarExtractor {
         return 'Buffer too small';
       case ERAR_MISSING_PASSWORD:
         return 'Password required';
+      case bindings.ERAR_EREFERENCE:
+        return 'Cannot open file reference';
+      case bindings.ERAR_BAD_PASSWORD:
+        return 'Wrong password';
+      case bindings.ERAR_LARGE_DICT:
+        return 'Need larger dictionary size';
       case ERAR_UNKNOWN:
       default:
         return 'Unknown error';

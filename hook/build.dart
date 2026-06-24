@@ -78,6 +78,10 @@ void main(List<String> args) async {
     ];
 
     // Platform-specific flags
+    if (Platform.isLinux || Platform.isMacOS) {
+      // Match the -D_UNIX flag used by ffigen so bindings and compiled code agree
+      flags.add('-D_UNIX');
+    }
     if (Platform.isLinux) {
       // On Linux: link GNU libstdc++ and optionally static link runtime
       flags.addAll([
