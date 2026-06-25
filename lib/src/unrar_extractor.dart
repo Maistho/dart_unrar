@@ -6,6 +6,11 @@ import 'package:ffi/ffi.dart';
 import 'unrar_exception.dart';
 import 'archive_entry.dart';
 import 'unrar_bindings.dart' as bindings;
+import 'unrar_bindings_ex.dart' as ex;
+
+// ---------------------------------------------------------------------------
+// Module-level callback state
+// ---------------------------------------------------------------------------
 
 final _pendingData = <int, _Buffer>{};
 int _nextId = 0;
@@ -41,18 +46,41 @@ class _Buffer {
 }
 
 int _unrarCallback(int msg, int userData, int p1, int p2) {
-  if (msg == bindings.UNRARCALLBACK_MESSAGES.UCM_PROCESSDATA.value) {
-    final buf = _pendingData[userData];
-    if (buf != null) {
-      final ptr = Pointer<Uint8>.fromAddress(p1);
-      buf.addChunk(ptr.asTypedList(p2));
-    }
+  switch (msg) {
+    case 1: // UCM_PROCESSDATA
+      final buf = _pendingData[userData];
+      if (buf != null) {
+        final ptr = Pointer<Uint8>.fromAddress(p1);
+        buf.addChunk(ptr.asTypedList(p2));
+      }
+      return 0;
+
+    case 0: // UCM_CHANGEVOLUME
+      // p2 = RAR_VOL_ASK (0) or RAR_VOL_NOTIFY (1).
+      // For ASK: return 1 to accept the library's suggested next-volume path.
+      // For NOTIFY: return 0 (informational only).
+      return p2 == bindings.RAR_VOL_ASK ? 1 : 0;
+
+    case 2: // UCM_NEEDPASSWORD
+      // Password requested interactively via callback — cannot supply it here.
+      // Callers should pass a password via the password parameter instead.
+      return -1;
+
+    case 5: // UCM_LARGEDICT
+      // Consent to using a large dictionary (>128 MB).
+      return 1;
+
+    default: // UCM_CHANGEVOLUMEW (3), UCM_NEEDPASSWORDW (4)
+      return 0;
   }
-  return 0;
 }
 
 final _nativeCallback =
     Pointer.fromFunction<bindings.UNRARCALLBACKFunction>(_unrarCallback, 0);
+
+// ---------------------------------------------------------------------------
+// UnrarExtractor
+// ---------------------------------------------------------------------------
 
 /// High-level interface for extracting RAR archives.
 class UnrarExtractor {
@@ -61,13 +89,6 @@ class UnrarExtractor {
   static DynamicLibrary get _lib {
     if (_dylib != null) return _dylib!;
 
-    // Try multiple paths to find the library. This covers common layouts:
-    // - .dart_tool/lib next to the app
-    // - current working directory
-    // - alongside the executable
-    // - bundle layout: ../lib relative to the executable (dart compile exe)
-    // - directory of Platform.script (useful during tests)
-    // - override via UNRAR_LIBRARY_PATH env var
     final possiblePaths = <String>[];
     void addPath(String path) {
       if (!possiblePaths.contains(path)) possiblePaths.add(path);
@@ -75,30 +96,24 @@ class UnrarExtractor {
 
     final libName = _libraryFileName();
 
-    // Env override: exact file or directory
     final envPath = Platform.environment['UNRAR_LIBRARY_PATH'];
     if (envPath != null && envPath.isNotEmpty) {
       final envAsDir = Directory(envPath);
       addPath(envAsDir.existsSync() ? _join(envAsDir.path, libName) : envPath);
     }
 
-    // Default working dir locations
     addPath(_join('.dart_tool/lib', libName));
     addPath(libName);
 
-    // Resolved executable (dart or compiled binary)
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     addPath(_join(exeDir, libName));
-    // Bundle layout: build/bundle/bin/<exe>, build/bundle/lib/<lib>
     addPath(_join(_join(exeDir, '..'), _join('lib', libName)));
 
-    // macOS app bundle: Contents/Frameworks/unrar.framework/unrar
     if (Platform.isMacOS) {
       final frameworksDir = _join(File(exeDir).parent.path, 'Frameworks');
       addPath(_join(frameworksDir, 'unrar.framework', 'unrar'));
     }
 
-    // Location of the running script (tests / `dart run`)
     if (Platform.script.isScheme('file')) {
       final scriptDir = File(Platform.script.toFilePath()).parent.path;
       addPath(_join(scriptDir, libName));
@@ -111,17 +126,35 @@ class UnrarExtractor {
       attempted.add(path);
       try {
         _dylib = DynamicLibrary.open(path);
+
+        // Validate DLL version before use.
+        final getVersion =
+            _dylib!.lookupFunction<Int32 Function(), int Function()>(
+          'RARGetDllVersion',
+        );
+        final version = getVersion();
+        if (version < bindings.RAR_DLL_VERSION) {
+          _dylib = null;
+          throw UnrarException(
+            'Loaded unrar library version $version is older than the '
+            'required version ${bindings.RAR_DLL_VERSION}. '
+            'Please rebuild with "dart build".',
+          );
+        }
+
         return _dylib!;
       } catch (e) {
+        if (e is UnrarException) rethrow;
         errors.add('$path => $e');
-        // Try next path
       }
     }
 
     final debug = Platform.environment['UNRAR_DEBUG'] == '1';
     final attemptedPaths = possiblePaths.join(', ');
     final msg = StringBuffer(
-      'Failed to load native unrar library. Please run "dart build" to build the library. Attempted paths: $attemptedPaths',
+      'Failed to load native unrar library. '
+      'Please run "dart build" to build the library. '
+      'Attempted paths: $attemptedPaths',
     );
     if (debug) {
       msg.writeln();
@@ -135,17 +168,10 @@ class UnrarExtractor {
           msg.writeln('- $err');
         }
       }
-      final envPath = Platform.environment['UNRAR_LIBRARY_PATH'];
-      if (envPath != null) {
-        msg.writeln('UNRAR_LIBRARY_PATH=$envPath');
-      }
-      msg.writeln(
-        'Executable dir: ${File(Platform.resolvedExecutable).parent.path}',
-      );
+      if (envPath != null) msg.writeln('UNRAR_LIBRARY_PATH=$envPath');
+      msg.writeln('Executable dir: ${File(Platform.resolvedExecutable).parent.path}');
       if (Platform.script.isScheme('file')) {
-        msg.writeln(
-          'Script dir: ${File(Platform.script.toFilePath()).parent.path}',
-        );
+        msg.writeln('Script dir: ${File(Platform.script.toFilePath()).parent.path}');
       }
     }
     throw UnrarException(msg.toString());
@@ -161,81 +187,80 @@ class UnrarExtractor {
   static String _join(String base, String name, [String? third]) {
     if (base.isEmpty) return name;
     final sep = Platform.pathSeparator;
-    final normalizedBase = base.endsWith(sep)
-        ? base.substring(0, base.length - 1)
-        : base;
+    final normalizedBase =
+        base.endsWith(sep) ? base.substring(0, base.length - 1) : base;
     final joined = '$normalizedBase$sep$name';
-    if (third != null) {
-      return '$joined$sep$third';
-    }
-    return joined;
+    return third != null ? '$joined$sep$third' : joined;
   }
 
-  // FFI function signatures
+  // -------------------------------------------------------------------------
+  // FFI function bindings
+  // -------------------------------------------------------------------------
+
   late final Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>)
-  _rarOpenArchive = _lib
-      .lookupFunction<
-        Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>),
-        Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>)
-      >('RAROpenArchive');
+      _rarOpenArchive = _lib.lookupFunction<
+          Pointer<Void> Function(Pointer<bindings.RAROpenArchiveData>),
+          Pointer<Void> Function(
+              Pointer<bindings.RAROpenArchiveData>)>('RAROpenArchive');
 
-  late final int Function(Pointer<Void>) _rarCloseArchive = _lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>),
-        int Function(Pointer<Void>)
-      >('RARCloseArchive');
+  late final Pointer<Void> Function(Pointer<ex.RAROpenArchiveDataEx>)
+      _rarOpenArchiveEx = _lib.lookupFunction<
+          Pointer<Void> Function(Pointer<ex.RAROpenArchiveDataEx>),
+          Pointer<Void> Function(
+              Pointer<ex.RAROpenArchiveDataEx>)>('RAROpenArchiveEx');
 
-  late final int Function(Pointer<Void>, Pointer<bindings.RARHeaderData>)
-  _rarReadHeader = _lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<bindings.RARHeaderData>),
-        int Function(Pointer<Void>, Pointer<bindings.RARHeaderData>)
-      >('RARReadHeader');
+  late final int Function(Pointer<Void>) _rarCloseArchive =
+      _lib.lookupFunction<Int32 Function(Pointer<Void>),
+          int Function(Pointer<Void>)>('RARCloseArchive');
+
+  late final int Function(Pointer<Void>, Pointer<ex.RARHeaderDataEx>)
+      _rarReadHeaderEx = _lib.lookupFunction<
+          Int32 Function(Pointer<Void>, Pointer<ex.RARHeaderDataEx>),
+          int Function(
+              Pointer<Void>, Pointer<ex.RARHeaderDataEx>)>('RARReadHeaderEx');
 
   late final int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)
-  _rarProcessFile = _lib
-      .lookupFunction<
-        Int32 Function(Pointer<Void>, Int32, Pointer<Utf8>, Pointer<Utf8>),
-        int Function(Pointer<Void>, int, Pointer<Utf8>, Pointer<Utf8>)
-      >('RARProcessFile');
+      _rarProcessFile = _lib.lookupFunction<
+          Int32 Function(Pointer<Void>, Int32, Pointer<Utf8>, Pointer<Utf8>),
+          int Function(Pointer<Void>, int, Pointer<Utf8>,
+              Pointer<Utf8>)>('RARProcessFile');
 
-  late final void Function(Pointer<Void>, Pointer<Utf8>) _rarSetPassword = _lib
-      .lookupFunction<
-        Void Function(Pointer<Void>, Pointer<Utf8>),
-        void Function(Pointer<Void>, Pointer<Utf8>)
-      >('RARSetPassword');
+  late final void Function(Pointer<Void>, Pointer<Utf8>) _rarSetPassword =
+      _lib.lookupFunction<Void Function(Pointer<Void>, Pointer<Utf8>),
+          void Function(Pointer<Void>, Pointer<Utf8>)>('RARSetPassword');
 
   late final void Function(Pointer<Void>, bindings.UNRARCALLBACK, int)
       _rarSetCallback = _lib.lookupFunction<
-        Void Function(Pointer<Void>, bindings.UNRARCALLBACK, Int64),
-        void Function(Pointer<Void>, bindings.UNRARCALLBACK, int)
-      >('RARSetCallback');
-  // Constants from dll.hpp
-  static const int ERAR_END_ARCHIVE = 10;
-  static const int ERAR_NO_MEMORY = 11;
-  static const int ERAR_BAD_DATA = 12;
-  static const int ERAR_BAD_ARCHIVE = 13;
-  static const int ERAR_UNKNOWN_FORMAT = 14;
-  static const int ERAR_EOPEN = 15;
-  static const int ERAR_ECREATE = 16;
-  static const int ERAR_ECLOSE = 17;
-  static const int ERAR_EREAD = 18;
-  static const int ERAR_EWRITE = 19;
-  static const int ERAR_SMALL_BUF = 20;
-  static const int ERAR_UNKNOWN = 21;
-  static const int ERAR_MISSING_PASSWORD = 22;
+          Void Function(Pointer<Void>, bindings.UNRARCALLBACK, Int64),
+          void Function(Pointer<Void>, bindings.UNRARCALLBACK,
+              int)>('RARSetCallback');
 
-  static const int RAR_OM_LIST = 0;
-  static const int RAR_OM_EXTRACT = 1;
-  static const int RAR_OM_LIST_INCSPLIT = 2;
+  // -------------------------------------------------------------------------
+  // Constants (mirrored from bindings for convenience)
+  // -------------------------------------------------------------------------
 
-  static const int RAR_SKIP = 0;
-  static const int RAR_TEST = 1;
-  static const int RAR_EXTRACT = 2;
+  static const int ERAR_END_ARCHIVE = bindings.ERAR_END_ARCHIVE;
+  static const int ERAR_NO_MEMORY = bindings.ERAR_NO_MEMORY;
+  static const int ERAR_BAD_DATA = bindings.ERAR_BAD_DATA;
+  static const int ERAR_BAD_ARCHIVE = bindings.ERAR_BAD_ARCHIVE;
+  static const int ERAR_UNKNOWN_FORMAT = bindings.ERAR_UNKNOWN_FORMAT;
+  static const int ERAR_EOPEN = bindings.ERAR_EOPEN;
+  static const int ERAR_ECREATE = bindings.ERAR_ECREATE;
+  static const int ERAR_ECLOSE = bindings.ERAR_ECLOSE;
+  static const int ERAR_EREAD = bindings.ERAR_EREAD;
+  static const int ERAR_EWRITE = bindings.ERAR_EWRITE;
+  static const int ERAR_SMALL_BUF = bindings.ERAR_SMALL_BUF;
+  static const int ERAR_UNKNOWN = bindings.ERAR_UNKNOWN;
+  static const int ERAR_MISSING_PASSWORD = bindings.ERAR_MISSING_PASSWORD;
 
-  static String _readFileName(Pointer<bindings.RARHeaderData> headerData) {
+  // -------------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------------
+
+  /// Reads the null-terminated filename from [RARHeaderDataEx.FileName] (1024 chars).
+  static String _readFileNameEx(Pointer<ex.RARHeaderDataEx> headerData) {
     final chars = <int>[];
-    for (var i = 0; i < 260; i++) {
+    for (var i = 0; i < 1024; i++) {
       final c = headerData.ref.FileName[i];
       if (c == 0) break;
       chars.add(c);
@@ -243,11 +268,117 @@ class UnrarExtractor {
     return utf8.decode(chars, allowMalformed: true);
   }
 
-  /// Lists all files in a RAR archive.
+  /// Converts a DOS date/time value to [DateTime].
   ///
-  /// Returns a list of [ArchiveEntry] objects representing each file.
+  /// DOS format: bits 31-25 = year-1980, 24-21 = month, 20-16 = day,
+  /// 15-11 = hour, 10-5 = minute, 4-0 = second/2.
+  static DateTime _dosTimeToDateTime(int dosTime) {
+    if (dosTime == 0) return DateTime.utc(1980);
+    final year = 1980 + ((dosTime >> 25) & 0x7F);
+    final month = (dosTime >> 21) & 0x0F;
+    final day = (dosTime >> 16) & 0x1F;
+    final hour = (dosTime >> 11) & 0x1F;
+    final minute = (dosTime >> 5) & 0x3F;
+    final second = (dosTime & 0x1F) * 2;
+    return DateTime.utc(
+      year,
+      month.clamp(1, 12),
+      day.clamp(1, 31),
+      hour,
+      minute,
+      second,
+    );
+  }
+
+  /// Builds an [ArchiveEntry] from an extended header.
+  static ArchiveEntry _entryFromHeaderEx(Pointer<ex.RARHeaderDataEx> h) {
+    final flags = h.ref.Flags;
+    final modTime = _dosTimeToDateTime(h.ref.FileTime);
+    // Combine 32-bit high/low pairs into 64-bit sizes.
+    final unpackedSize =
+        h.ref.UnpSize + (h.ref.UnpSizeHigh * 0x100000000);
+    final packedSize =
+        h.ref.PackSize + (h.ref.PackSizeHigh * 0x100000000);
+
+    return ArchiveEntry(
+      name: _readFileNameEx(h),
+      size: unpackedSize,
+      packedSize: packedSize,
+      crc: h.ref.FileCRC,
+      attributes: h.ref.FileAttr,
+      modificationTime: modTime,
+      isDirectory: (flags & bindings.RHDF_DIRECTORY) != 0,
+      isEncrypted: (flags & bindings.RHDF_ENCRYPTED) != 0,
+      isSplitBefore: (flags & bindings.RHDF_SPLITBEFORE) != 0,
+      isSplitAfter: (flags & bindings.RHDF_SPLITAFTER) != 0,
+      isSolid: (flags & bindings.RHDF_SOLID) != 0,
+      hashType: h.ref.HashType,
+    );
+  }
+
+  void _setPassword(Pointer<Void> handle, String? password) {
+    if (password != null) {
+      final passwordPtr = password.toNativeUtf8();
+      try {
+        _rarSetPassword(handle, passwordPtr);
+      } finally {
+        calloc.free(passwordPtr);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------------
+
+  /// Returns archive-level metadata without reading individual file headers.
+  ///
+  /// Uses [RAROpenArchiveEx] to read archive flags (solid, volume, encrypted
+  /// headers, etc.) without enumerating entries.
+  ///
+  /// Throws [UnrarException] if the archive cannot be opened.
+  ex.ArchiveInfo archiveInfo(String archivePath, {String? password}) {
+    final archiveData = calloc<ex.RAROpenArchiveDataEx>();
+    try {
+      final archiveNamePtr = archivePath.toNativeUtf8();
+      try {
+        archiveData.ref.ArcName = archiveNamePtr.cast();
+        archiveData.ref.ArcNameW = nullptr;
+        archiveData.ref.OpenMode = bindings.RAR_OM_LIST;
+        archiveData.ref.CmtBuf = nullptr;
+        archiveData.ref.CmtBufSize = 0;
+        archiveData.ref.Callback = nullptr;
+        archiveData.ref.UserData = 0;
+        archiveData.ref.OpFlags = 0;
+
+        final handle = _rarOpenArchiveEx(archiveData);
+        if (archiveData.ref.OpenResult != bindings.ERAR_SUCCESS) {
+          throw UnrarException(
+            _getErrorMessage(archiveData.ref.OpenResult),
+            archiveData.ref.OpenResult,
+          );
+        }
+        try {
+          _setPassword(handle, password);
+          return ex.ArchiveInfo.fromFlags(archiveData.ref.Flags);
+        } finally {
+          _rarCloseArchive(handle);
+        }
+      } finally {
+        calloc.free(archiveNamePtr);
+      }
+    } finally {
+      calloc.free(archiveData);
+    }
+  }
+
+  /// Lists all entries in a RAR archive.
+  ///
+  /// Returns a list of [ArchiveEntry] objects with full metadata including
+  /// encryption, split, and solid flags. Filenames up to 1024 characters.
+  ///
   /// Throws [UnrarException] if the archive cannot be opened or read.
-  List<ArchiveEntry> listFiles(String archivePath) {
+  List<ArchiveEntry> listFiles(String archivePath, {String? password}) {
     final entries = <ArchiveEntry>[];
     final archiveData = calloc<bindings.RAROpenArchiveData>();
 
@@ -268,38 +399,19 @@ class UnrarExtractor {
         }
 
         try {
-          final headerData = calloc<bindings.RARHeaderData>();
+          _setPassword(handle, password);
+
+          final headerData = calloc<ex.RARHeaderDataEx>();
           try {
             while (true) {
-              final result = _rarReadHeader(handle, headerData);
+              final result = _rarReadHeaderEx(handle, headerData);
               if (result == bindings.ERAR_END_ARCHIVE) break;
               if (result != bindings.ERAR_SUCCESS) {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final fileNameStr = _readFileName(headerData);
-              final isDirectory =
-                  (headerData.ref.Flags & bindings.RHDF_DIRECTORY) != 0;
+              entries.add(_entryFromHeaderEx(headerData));
 
-              final unixTime = headerData.ref.FileTime;
-              final modTime = DateTime.fromMillisecondsSinceEpoch(
-                unixTime * 1000,
-                isUtc: true,
-              );
-
-              entries.add(
-                ArchiveEntry(
-                  name: fileNameStr,
-                  size: headerData.ref.UnpSize,
-                  packedSize: headerData.ref.PackSize,
-                  crc: headerData.ref.FileCRC,
-                  attributes: headerData.ref.FileAttr,
-                  modificationTime: modTime,
-                  isDirectory: isDirectory,
-                ),
-              );
-
-              // Skip to next file
               final processResult = _rarProcessFile(
                 handle,
                 bindings.RAR_SKIP,
@@ -329,10 +441,8 @@ class UnrarExtractor {
     return entries;
   }
 
-  /// Extracts all files from a RAR archive to the specified output directory.
+  /// Extracts all files from a RAR archive to [outputPath].
   ///
-  /// [archivePath]: Path to the RAR archive file.
-  /// [outputPath]: Directory where files will be extracted.
   /// [password]: Optional password for encrypted archives.
   ///
   /// Throws [UnrarException] if extraction fails.
@@ -356,20 +466,14 @@ class UnrarExtractor {
         }
 
         try {
-          if (password != null) {
-            final passwordPtr = password.toNativeUtf8();
-            try {
-              _rarSetPassword(handle, passwordPtr);
-            } finally {
-              calloc.free(passwordPtr);
-            }
-          }
+          _setPassword(handle, password);
+          _rarSetCallback(handle, _nativeCallback, 0);
 
-          final headerData = calloc<bindings.RARHeaderData>();
+          final headerData = calloc<ex.RARHeaderDataEx>();
           final destPathPtr = outputPath.toNativeUtf8();
           try {
             while (true) {
-              final result = _rarReadHeader(handle, headerData);
+              final result = _rarReadHeaderEx(handle, headerData);
               if (result == bindings.ERAR_END_ARCHIVE) break;
               if (result != bindings.ERAR_SUCCESS) {
                 throw UnrarException(_getErrorMessage(result), result);
@@ -405,8 +509,7 @@ class UnrarExtractor {
 
   /// Extracts a single file from a RAR archive and returns its contents.
   ///
-  /// [archivePath]: Path to the RAR archive file.
-  /// [fileName]: Name of the file to extract from the archive.
+  /// [fileName]: Name of the file as it appears in the archive listing.
   /// [password]: Optional password for encrypted archives.
   ///
   /// Returns the file contents as a [Uint8List].
@@ -419,7 +522,6 @@ class UnrarExtractor {
     final tempDir = Directory.systemTemp.createTempSync('unrar_');
     try {
       final tempOutputPath = tempDir.path;
-
       final archiveData = calloc<bindings.RAROpenArchiveData>();
       try {
         final archiveNamePtr = archivePath.toNativeUtf8();
@@ -438,27 +540,21 @@ class UnrarExtractor {
           }
 
           try {
-            if (password != null) {
-              final passwordPtr = password.toNativeUtf8();
-              try {
-                _rarSetPassword(handle, passwordPtr);
-              } finally {
-                calloc.free(passwordPtr);
-              }
-            }
+            _setPassword(handle, password);
+            _rarSetCallback(handle, _nativeCallback, 0);
 
-            final headerData = calloc<bindings.RARHeaderData>();
+            final headerData = calloc<ex.RARHeaderDataEx>();
             final destPathPtr = tempOutputPath.toNativeUtf8();
             try {
               var found = false;
               while (true) {
-                final result = _rarReadHeader(handle, headerData);
+                final result = _rarReadHeaderEx(handle, headerData);
                 if (result == bindings.ERAR_END_ARCHIVE) break;
                 if (result != bindings.ERAR_SUCCESS) {
                   throw UnrarException(_getErrorMessage(result), result);
                 }
 
-                final currentFileName = _readFileName(headerData);
+                final currentFileName = _readFileNameEx(headerData);
 
                 if (currentFileName == fileName) {
                   found = true;
@@ -499,7 +595,6 @@ class UnrarExtractor {
               if (!extractedFile.existsSync()) {
                 throw UnrarException('Failed to extract file: $fileName');
               }
-
               return extractedFile.readAsBytesSync();
             } finally {
               calloc.free(destPathPtr);
@@ -519,13 +614,11 @@ class UnrarExtractor {
     }
   }
 
-  /// Extracts a single file from a RAR archive directly to memory.
+  /// Extracts a single file directly to memory without writing to disk.
   ///
-  /// [archivePath]: Path to the RAR archive file.
-  /// [fileName]: Name of the file to extract from the archive.
   /// [password]: Optional password for encrypted archives.
   ///
-  /// Returns the file contents as a [Uint8List] without writing to disk.
+  /// Returns the file contents as a [Uint8List].
   /// Throws [UnrarException] if the file is not found or extraction fails.
   Uint8List extractFileToMemory(
     String archivePath,
@@ -533,7 +626,6 @@ class UnrarExtractor {
     String? password,
   }) {
     final id = _nextId++;
-
     final archiveData = calloc<bindings.RAROpenArchiveData>();
     try {
       final archiveNamePtr = archivePath.toNativeUtf8();
@@ -552,33 +644,25 @@ class UnrarExtractor {
         }
 
         try {
-          if (password != null) {
-            final passwordPtr = password.toNativeUtf8();
-            try {
-              _rarSetPassword(handle, passwordPtr);
-            } finally {
-              calloc.free(passwordPtr);
-            }
-          }
-
+          _setPassword(handle, password);
           _rarSetCallback(handle, _nativeCallback, id);
 
-          final headerData = calloc<bindings.RARHeaderData>();
+          final headerData = calloc<ex.RARHeaderDataEx>();
           try {
             while (true) {
-              final result = _rarReadHeader(handle, headerData);
+              final result = _rarReadHeaderEx(handle, headerData);
               if (result == bindings.ERAR_END_ARCHIVE) break;
               if (result != bindings.ERAR_SUCCESS) {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final currentFileName = _readFileName(headerData);
+              final currentFileName = _readFileNameEx(headerData);
 
               if (currentFileName == fileName) {
-                final unpSize = headerData.ref.UnpSize;
-                _pendingData[id] = unpSize > 0
-                    ? _Buffer.fixed(unpSize)
-                    : _Buffer();
+                final unpSize = headerData.ref.UnpSize +
+                    (headerData.ref.UnpSizeHigh * 0x100000000);
+                _pendingData[id] =
+                    unpSize > 0 ? _Buffer.fixed(unpSize) : _Buffer();
 
                 final processResult = _rarProcessFile(
                   handle,
@@ -630,18 +714,15 @@ class UnrarExtractor {
 
   /// Extracts all files from a RAR archive directly to memory.
   ///
-  /// [archivePath]: Path to the RAR archive file.
+  /// Directories are skipped. Returns a map of filename → decompressed bytes.
   /// [password]: Optional password for encrypted archives.
   ///
-  /// Returns a map of filenames to their decompressed contents as [Uint8List],
-  /// without writing any files to disk.
   /// Throws [UnrarException] if extraction fails.
   Map<String, Uint8List> extractAllToMemory(
     String archivePath, {
     String? password,
   }) {
     final id = _nextId++;
-
     final archiveData = calloc<bindings.RAROpenArchiveData>();
     try {
       final archiveNamePtr = archivePath.toNativeUtf8();
@@ -660,49 +741,30 @@ class UnrarExtractor {
         }
 
         try {
-          if (password != null) {
-            final passwordPtr = password.toNativeUtf8();
-            try {
-              _rarSetPassword(handle, passwordPtr);
-            } finally {
-              calloc.free(passwordPtr);
-            }
-          }
-
+          _setPassword(handle, password);
           _rarSetCallback(handle, _nativeCallback, id);
 
-          final headerData = calloc<bindings.RARHeaderData>();
+          final headerData = calloc<ex.RARHeaderDataEx>();
           try {
             final results = <String, Uint8List>{};
             while (true) {
-              final result = _rarReadHeader(handle, headerData);
+              final result = _rarReadHeaderEx(handle, headerData);
               if (result == bindings.ERAR_END_ARCHIVE) break;
               if (result != bindings.ERAR_SUCCESS) {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final currentFileName = _readFileName(headerData);
+              final currentFileName = _readFileNameEx(headerData);
               final isDirectory =
                   (headerData.ref.Flags & bindings.RHDF_DIRECTORY) != 0;
 
               if (isDirectory) {
-                final processResult = _rarProcessFile(
-                  handle,
-                  bindings.RAR_SKIP,
-                  nullptr,
-                  nullptr,
-                );
-                if (processResult != bindings.ERAR_SUCCESS) {
-                  throw UnrarException(
-                    _getErrorMessage(processResult),
-                    processResult,
-                  );
-                }
+                _rarProcessFile(handle, bindings.RAR_SKIP, nullptr, nullptr);
               } else {
-                final unpSize = headerData.ref.UnpSize;
-                _pendingData[id] = unpSize > 0
-                    ? _Buffer.fixed(unpSize)
-                    : _Buffer();
+                final unpSize = headerData.ref.UnpSize +
+                    (headerData.ref.UnpSizeHigh * 0x100000000);
+                _pendingData[id] =
+                    unpSize > 0 ? _Buffer.fixed(unpSize) : _Buffer();
 
                 final processResult = _rarProcessFile(
                   handle,
@@ -739,7 +801,7 @@ class UnrarExtractor {
 
   /// Tests a RAR archive for integrity.
   ///
-  /// Returns true if the archive is valid and can be extracted.
+  /// Returns `true` if the archive passes verification.
   /// Throws [UnrarException] if the archive is corrupted or cannot be opened.
   bool testArchive(String archivePath, {String? password}) {
     final archiveData = calloc<bindings.RAROpenArchiveData>();
@@ -761,19 +823,12 @@ class UnrarExtractor {
         }
 
         try {
-          if (password != null) {
-            final passwordPtr = password.toNativeUtf8();
-            try {
-              _rarSetPassword(handle, passwordPtr);
-            } finally {
-              calloc.free(passwordPtr);
-            }
-          }
+          _setPassword(handle, password);
 
-          final headerData = calloc<bindings.RARHeaderData>();
+          final headerData = calloc<ex.RARHeaderDataEx>();
           try {
             while (true) {
-              final result = _rarReadHeader(handle, headerData);
+              final result = _rarReadHeaderEx(handle, headerData);
               if (result == bindings.ERAR_END_ARCHIVE) break;
               if (result != bindings.ERAR_SUCCESS) {
                 throw UnrarException(_getErrorMessage(result), result);
@@ -808,29 +863,33 @@ class UnrarExtractor {
     return true;
   }
 
+  // -------------------------------------------------------------------------
+  // Error mapping
+  // -------------------------------------------------------------------------
+
   String _getErrorMessage(int errorCode) {
     switch (errorCode) {
-      case ERAR_NO_MEMORY:
+      case bindings.ERAR_NO_MEMORY:
         return 'Not enough memory';
-      case ERAR_BAD_DATA:
+      case bindings.ERAR_BAD_DATA:
         return 'Archive header or data is broken';
-      case ERAR_BAD_ARCHIVE:
+      case bindings.ERAR_BAD_ARCHIVE:
         return 'File is not a valid RAR archive';
-      case ERAR_UNKNOWN_FORMAT:
+      case bindings.ERAR_UNKNOWN_FORMAT:
         return 'Unknown archive format';
-      case ERAR_EOPEN:
+      case bindings.ERAR_EOPEN:
         return 'Cannot open file';
-      case ERAR_ECREATE:
+      case bindings.ERAR_ECREATE:
         return 'Cannot create file';
-      case ERAR_ECLOSE:
+      case bindings.ERAR_ECLOSE:
         return 'Cannot close file';
-      case ERAR_EREAD:
+      case bindings.ERAR_EREAD:
         return 'Read error';
-      case ERAR_EWRITE:
+      case bindings.ERAR_EWRITE:
         return 'Write error';
-      case ERAR_SMALL_BUF:
+      case bindings.ERAR_SMALL_BUF:
         return 'Buffer too small';
-      case ERAR_MISSING_PASSWORD:
+      case bindings.ERAR_MISSING_PASSWORD:
         return 'Password required';
       case bindings.ERAR_EREFERENCE:
         return 'Cannot open file reference';
@@ -838,9 +897,9 @@ class UnrarExtractor {
         return 'Wrong password';
       case bindings.ERAR_LARGE_DICT:
         return 'Need larger dictionary size';
-      case ERAR_UNKNOWN:
+      case bindings.ERAR_UNKNOWN:
       default:
-        return 'Unknown error';
+        return 'Unknown error (code: $errorCode)';
     }
   }
 }

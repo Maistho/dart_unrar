@@ -1,0 +1,3 @@
+World file content — second file in the archive.
+Used to verify multi-file extraction and listing.
+CRC and size should both be verifiable.

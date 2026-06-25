@@ -141,7 +141,7 @@ void main() {
 
       expect(
         entry.toString(),
-        'ArchiveEntry(name: test.txt, size: 1024, isDirectory: false)',
+        'ArchiveEntry(name: test.txt, size: 1024, isDirectory: false, isEncrypted: false)',
       );
     });
   });
