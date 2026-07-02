@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -257,17 +256,6 @@ class UnrarExtractor {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  /// Reads the null-terminated filename from [RARHeaderDataEx.FileName] (1024 chars).
-  static String _readFileNameEx(Pointer<ex.RARHeaderDataEx> headerData) {
-    final chars = <int>[];
-    for (var i = 0; i < 1024; i++) {
-      final c = headerData.ref.FileName[i];
-      if (c == 0) break;
-      chars.add(c);
-    }
-    return utf8.decode(chars, allowMalformed: true);
-  }
-
   /// Converts a DOS date/time value to [DateTime].
   ///
   /// DOS format: bits 31-25 = year-1980, 24-21 = month, 20-16 = day,
@@ -290,29 +278,26 @@ class UnrarExtractor {
     );
   }
 
-  /// Builds an [ArchiveEntry] from an extended header.
-  static ArchiveEntry _entryFromHeaderEx(Pointer<ex.RARHeaderDataEx> h) {
-    final flags = h.ref.Flags;
-    final modTime = _dosTimeToDateTime(h.ref.FileTime);
-    // Combine 32-bit high/low pairs into 64-bit sizes.
-    final unpackedSize =
-        h.ref.UnpSize + (h.ref.UnpSizeHigh * 0x100000000);
-    final packedSize =
-        h.ref.PackSize + (h.ref.PackSizeHigh * 0x100000000);
+  /// Builds an [ArchiveEntry] from an extended header view.
+  static ArchiveEntry _entryFromView(ex.RARHeaderDataExView v) {
+    final flags = v.flags;
+    final modTime = _dosTimeToDateTime(v.fileTime);
+    final unpackedSize = v.unpSize + (v.unpSizeHigh * 0x100000000);
+    final packedSize = v.packSize + (v.packSizeHigh * 0x100000000);
 
     return ArchiveEntry(
-      name: _readFileNameEx(h),
+      name: v.fileName,
       size: unpackedSize,
       packedSize: packedSize,
-      crc: h.ref.FileCRC,
-      attributes: h.ref.FileAttr,
+      crc: v.fileCRC,
+      attributes: v.fileAttr,
       modificationTime: modTime,
       isDirectory: (flags & bindings.RHDF_DIRECTORY) != 0,
       isEncrypted: (flags & bindings.RHDF_ENCRYPTED) != 0,
       isSplitBefore: (flags & bindings.RHDF_SPLITBEFORE) != 0,
       isSplitAfter: (flags & bindings.RHDF_SPLITAFTER) != 0,
       isSolid: (flags & bindings.RHDF_SOLID) != 0,
-      hashType: h.ref.HashType,
+      hashType: v.hashType,
     );
   }
 
@@ -401,7 +386,7 @@ class UnrarExtractor {
         try {
           _setPassword(handle, password);
 
-          final headerData = calloc<ex.RARHeaderDataEx>();
+          final headerData = ex.RARHeaderDataExView.allocate();
           try {
             while (true) {
               final result = _rarReadHeaderEx(handle, headerData);
@@ -410,7 +395,7 @@ class UnrarExtractor {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              entries.add(_entryFromHeaderEx(headerData));
+              entries.add(_entryFromView(ex.RARHeaderDataExView.fromOpaque(headerData)));
 
               final processResult = _rarProcessFile(
                 handle,
@@ -469,7 +454,7 @@ class UnrarExtractor {
           _setPassword(handle, password);
           _rarSetCallback(handle, _nativeCallback, 0);
 
-          final headerData = calloc<ex.RARHeaderDataEx>();
+          final headerData = ex.RARHeaderDataExView.allocate();
           final destPathPtr = outputPath.toNativeUtf8();
           try {
             while (true) {
@@ -543,7 +528,7 @@ class UnrarExtractor {
             _setPassword(handle, password);
             _rarSetCallback(handle, _nativeCallback, 0);
 
-            final headerData = calloc<ex.RARHeaderDataEx>();
+            final headerData = ex.RARHeaderDataExView.allocate();
             final destPathPtr = tempOutputPath.toNativeUtf8();
             try {
               var found = false;
@@ -554,7 +539,8 @@ class UnrarExtractor {
                   throw UnrarException(_getErrorMessage(result), result);
                 }
 
-                final currentFileName = _readFileNameEx(headerData);
+                final view = ex.RARHeaderDataExView.fromOpaque(headerData);
+                final currentFileName = view.fileName;
 
                 if (currentFileName == fileName) {
                   found = true;
@@ -647,7 +633,7 @@ class UnrarExtractor {
           _setPassword(handle, password);
           _rarSetCallback(handle, _nativeCallback, id);
 
-          final headerData = calloc<ex.RARHeaderDataEx>();
+          final headerData = ex.RARHeaderDataExView.allocate();
           try {
             while (true) {
               final result = _rarReadHeaderEx(handle, headerData);
@@ -656,11 +642,11 @@ class UnrarExtractor {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final currentFileName = _readFileNameEx(headerData);
+              final view = ex.RARHeaderDataExView.fromOpaque(headerData);
+              final currentFileName = view.fileName;
 
               if (currentFileName == fileName) {
-                final unpSize = headerData.ref.UnpSize +
-                    (headerData.ref.UnpSizeHigh * 0x100000000);
+                final unpSize = view.unpSize + (view.unpSizeHigh * 0x100000000);
                 _pendingData[id] =
                     unpSize > 0 ? _Buffer.fixed(unpSize) : _Buffer();
 
@@ -744,7 +730,7 @@ class UnrarExtractor {
           _setPassword(handle, password);
           _rarSetCallback(handle, _nativeCallback, id);
 
-          final headerData = calloc<ex.RARHeaderDataEx>();
+          final headerData = ex.RARHeaderDataExView.allocate();
           try {
             final results = <String, Uint8List>{};
             while (true) {
@@ -754,15 +740,15 @@ class UnrarExtractor {
                 throw UnrarException(_getErrorMessage(result), result);
               }
 
-              final currentFileName = _readFileNameEx(headerData);
+              final view = ex.RARHeaderDataExView.fromOpaque(headerData);
+              final currentFileName = view.fileName;
               final isDirectory =
-                  (headerData.ref.Flags & bindings.RHDF_DIRECTORY) != 0;
+                  (view.flags & bindings.RHDF_DIRECTORY) != 0;
 
               if (isDirectory) {
                 _rarProcessFile(handle, bindings.RAR_SKIP, nullptr, nullptr);
               } else {
-                final unpSize = headerData.ref.UnpSize +
-                    (headerData.ref.UnpSizeHigh * 0x100000000);
+                final unpSize = view.unpSize + (view.unpSizeHigh * 0x100000000);
                 _pendingData[id] =
                     unpSize > 0 ? _Buffer.fixed(unpSize) : _Buffer();
 
@@ -825,7 +811,7 @@ class UnrarExtractor {
         try {
           _setPassword(handle, password);
 
-          final headerData = calloc<ex.RARHeaderDataEx>();
+          final headerData = ex.RARHeaderDataExView.allocate();
           try {
             while (true) {
               final result = _rarReadHeaderEx(handle, headerData);

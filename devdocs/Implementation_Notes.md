@@ -11,24 +11,44 @@ the Dart–C boundary.
 
 ## wchar_t size is platform-specific
 
-The most significant portability constraint.
+The most significant portability constraint. Windows is a target platform.
 
 - **Unix (macOS, Linux):** `wchar_t` is 4 bytes (UTF-32 code unit).
 - **Windows:** `wchar_t` is 2 bytes (UTF-16 code unit).
 
-The auto-generated `ffigen` bindings (`lib/src/unrar_bindings.dart`) mark
-`RARHeaderDataEx` and `RAROpenArchiveDataEx` as `ffi.Opaque` because `ffigen`
-cannot statically resolve `wchar_t` width. This makes both structs unusable for
-field access.
+Because Dart FFI struct field types must be compile-time constants, a single
+`ffi.Struct` subclass cannot represent `RARHeaderDataEx` on both platforms.
 
-`lib/src/unrar_bindings_ex.dart` provides manually written Dart `ffi.Struct`
-subclasses for Unix. All `wchar_t` arrays are declared as
-`ffi.Array<ffi.Uint32>` (4 bytes each) and all `wchar_t*` pointers as
-`ffi.Pointer<ffi.Void>` (8 bytes on 64-bit). The struct is annotated
-`@ffi.Packed(1)` to match the `#pragma pack(1)` in `dll.hpp`.
+### Solution: Opaque + runtime-offset view
 
-If Windows support is needed, a parallel `_win32` variant using `Uint16` for
-`wchar_t` fields would be required.
+`RARHeaderDataEx` is declared as `ffi.Opaque` (matching the `ffigen` stub).
+Field access goes through `RARHeaderDataExView`, which computes all byte
+offsets at runtime using `Platform.isWindows`:
+
+```dart
+static final int _wcharSize = Platform.isWindows ? 2 : 4;
+static final int _fileNameOff = 1024 + 1024 * _wcharSize;
+static final int _fixedOff    = _fileNameOff + 1024 + 1024 * _wcharSize;
+static final int structSize   = _fixedOff + 4100;
+```
+
+| Platform | wchar_t | FileName at | Fixed fields at | Struct size |
+|----------|---------|-------------|-----------------|-------------|
+| Unix     | 4 bytes | 5120        | 10240           | 14,340 bytes |
+| Windows  | 2 bytes | 3072        | 6144            | 10,244 bytes |
+
+Allocation uses raw bytes cast to the opaque type:
+```dart
+calloc<Uint8>(structSize).cast<RARHeaderDataEx>()
+```
+
+Field reads use `_u32(absOff)` — manual little-endian assembly — to avoid
+unaligned-access issues from `#pragma pack(1)`.
+
+`RAROpenArchiveDataEx` remains a concrete `ffi.Struct` because its fields are
+pointers only (no `wchar_t` arrays). However, `UserData` is `long`, which is 8
+bytes on Unix and 4 bytes on Windows — Windows support for that struct is
+deferred (see Gap 8 in Gap_analysis_dll_vs_dart.md).
 
 ---
 
@@ -144,7 +164,7 @@ The correct decoder is `utf8.decode(chars, allowMalformed: true)`. The
 `allowMalformed: true` flag prevents a `FormatException` on corrupt or
 RAR4-style Latin-1 filenames while still decoding valid UTF-8 accurately.
 
-Both `_readFileNameEx` helpers in `unrar_extractor.dart` use this approach.
+The `fileName` getter in `RARHeaderDataExView` uses this approach.
 
 ---
 
@@ -234,5 +254,15 @@ by default). Source files are in `test_data/sources/`.
 | `encrypted_headers.rar`| `-hp test123`, both headers and data encrypted       |
 | `unicode_names.rar`    | café.txt — UTF-8 filename                            |
 | `multi.part01..04.rar` | `-v300b` split into ~300-byte volumes                |
+| `basic_rar4.rar`       | RAR4, hello.txt + world.txt, stored (Method=0x30)    |
+| `rar4_with_dirs.rar`   | RAR4, with explicit `subdir/` directory entry        |
+| `rar4_solid.rar`       | RAR4, MHD_SOLID flag set in MAIN_HEAD (archive-level)|
+| `rar4_binary.rar`      | RAR4, binary.bin (512 bytes, 0x00..0xFF repeated)    |
 
-RAR 7.22 trial does not support the `-ma4` switch; all test archives are RAR5.
+RAR 7.x cannot create RAR4 archives (the `-ma4` switch was removed in RAR 5.x,
+not a trial limitation). The RAR4 archives are crafted programmatically by
+`test_data/make_rar4_archives.py`, which builds them from the RAR4 binary
+format spec: Marker + MAIN_HEAD (0x73) + FILE_HEAD (0x74) + END_HEAD (0x7B).
+All entries use Method=0x30 (stored, no compression). CRC16 = lower 16 bits
+of CRC32. FileAttr = `0x81A4` (Unix `-rw-r--r--`). FileTime = DOS date/time
+for 2026-06-24 12:00:00.

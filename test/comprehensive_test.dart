@@ -790,4 +790,191 @@ void main() {
       expect(extractor.testArchive(fixture('multi.part01.rar')), isTrue);
     });
   });
+
+  // =========================================================================
+  // RAR4 archives
+  // RAR 7.x cannot create RAR4 archives (the -ma4 switch was removed in RAR 5.x).
+  // These archives are crafted programmatically by test_data/make_rar4_archives.py
+  // using the RAR4 binary format specification (stored/uncompressed, Method=0x30).
+  // =========================================================================
+
+  group('RAR4 archives', () {
+    // -------------------------------------------------------------------------
+    // listFiles
+    // -------------------------------------------------------------------------
+
+    test('basic_rar4: lists correct file count and names', () {
+      final entries = extractor.listFiles(fixture('basic_rar4.rar'));
+      expect(entries.length, equals(2));
+      expect(entries.map((e) => e.name), containsAll(['hello.txt', 'world.txt']));
+    });
+
+    test('basic_rar4: entries are files, not directories', () {
+      final entries = extractor.listFiles(fixture('basic_rar4.rar'));
+      expect(entries.every((e) => !e.isDirectory), isTrue);
+    });
+
+    test('basic_rar4: entry sizes match source files', () {
+      final entries = extractor.listFiles(fixture('basic_rar4.rar'));
+      final hello = entries.firstWhere((e) => e.name == 'hello.txt');
+      final expected = File(fixtureSource('hello.txt')).lengthSync();
+      expect(hello.size, equals(expected));
+    });
+
+    test('basic_rar4: entries not encrypted', () {
+      final entries = extractor.listFiles(fixture('basic_rar4.rar'));
+      expect(entries.every((e) => !e.isEncrypted), isTrue);
+    });
+
+    test('basic_rar4: modification time is plausible DOS date', () {
+      final entries = extractor.listFiles(fixture('basic_rar4.rar'));
+      for (final e in entries) {
+        expect(e.modificationTime.year, greaterThanOrEqualTo(1980));
+      }
+    });
+
+    test('rar4_with_dirs: directory entry present', () {
+      final entries = extractor.listFiles(fixture('rar4_with_dirs.rar'));
+      final dirs = entries.where((e) => e.isDirectory).toList();
+      expect(dirs, isNotEmpty);
+      expect(dirs.any((e) => e.name == 'subdir'), isTrue);
+    });
+
+    test('rar4_with_dirs: nested file listed with full path', () {
+      final entries = extractor.listFiles(fixture('rar4_with_dirs.rar'));
+      expect(entries.any((e) => e.name == 'subdir/nested.txt'), isTrue);
+    });
+
+    test('rar4_binary: binary file listed with correct size', () {
+      final entries = extractor.listFiles(fixture('rar4_binary.rar'));
+      expect(entries.length, equals(1));
+      expect(entries.first.name, equals('binary.bin'));
+      expect(entries.first.size, equals(512));
+    });
+
+    // -------------------------------------------------------------------------
+    // testArchive
+    // -------------------------------------------------------------------------
+
+    test('basic_rar4 passes integrity check', () {
+      expect(extractor.testArchive(fixture('basic_rar4.rar')), isTrue);
+    });
+
+    test('rar4_with_dirs passes integrity check', () {
+      expect(extractor.testArchive(fixture('rar4_with_dirs.rar')), isTrue);
+    });
+
+    test('rar4_solid passes integrity check', () {
+      expect(extractor.testArchive(fixture('rar4_solid.rar')), isTrue);
+    });
+
+    test('rar4_binary passes integrity check', () {
+      expect(extractor.testArchive(fixture('rar4_binary.rar')), isTrue);
+    });
+
+    // -------------------------------------------------------------------------
+    // extractAll
+    // -------------------------------------------------------------------------
+
+    test('basic_rar4: extractAll writes all files', () {
+      extractor.extractAll(fixture('basic_rar4.rar'), outputDir.path);
+      expect(File(path.join(outputDir.path, 'hello.txt')).existsSync(), isTrue);
+      expect(File(path.join(outputDir.path, 'world.txt')).existsSync(), isTrue);
+    });
+
+    test('basic_rar4: extracted hello.txt content matches source', () {
+      extractor.extractAll(fixture('basic_rar4.rar'), outputDir.path);
+      final got = File(path.join(outputDir.path, 'hello.txt')).readAsStringSync();
+      expect(got, equals(readSource('hello.txt')));
+    });
+
+    test('rar4_with_dirs: extractAll preserves directory structure', () {
+      extractor.extractAll(fixture('rar4_with_dirs.rar'), outputDir.path);
+      final nested = File(path.join(outputDir.path, 'subdir', 'nested.txt'));
+      expect(nested.existsSync(), isTrue);
+      expect(nested.readAsStringSync(), equals(readSource('subdir/nested.txt')));
+    });
+
+    test('rar4_binary: extractAll writes exact binary bytes', () {
+      extractor.extractAll(fixture('rar4_binary.rar'), outputDir.path);
+      final got = File(path.join(outputDir.path, 'binary.bin')).readAsBytesSync();
+      final expected = File(fixtureSource('binary.bin')).readAsBytesSync();
+      expect(got, equals(expected));
+    });
+
+    // -------------------------------------------------------------------------
+    // extractFile
+    // -------------------------------------------------------------------------
+
+    test('basic_rar4: extractFile returns correct content', () {
+      final bytes = extractor.extractFile(fixture('basic_rar4.rar'), 'hello.txt');
+      expect(utf8.decode(bytes), equals(readSource('hello.txt')));
+    });
+
+    test('rar4_binary: extractFile returns exact binary bytes', () {
+      final got = extractor.extractFile(fixture('rar4_binary.rar'), 'binary.bin');
+      final expected = File(fixtureSource('binary.bin')).readAsBytesSync();
+      expect(got, equals(expected));
+    });
+
+    test('rar4_with_dirs: extractFile retrieves nested file', () {
+      final bytes = extractor.extractFile(
+          fixture('rar4_with_dirs.rar'), 'subdir/nested.txt');
+      expect(utf8.decode(bytes), equals(readSource('subdir/nested.txt')));
+    });
+
+    // -------------------------------------------------------------------------
+    // extractFileToMemory
+    // -------------------------------------------------------------------------
+
+    test('basic_rar4: extractFileToMemory returns correct content', () {
+      final bytes =
+          extractor.extractFileToMemory(fixture('basic_rar4.rar'), 'hello.txt');
+      expect(utf8.decode(bytes), equals(readSource('hello.txt')));
+    });
+
+    test('basic_rar4: memory result matches disk extractFile', () {
+      final fromMem =
+          extractor.extractFileToMemory(fixture('basic_rar4.rar'), 'hello.txt');
+      final fromDisk =
+          extractor.extractFile(fixture('basic_rar4.rar'), 'hello.txt');
+      expect(fromMem, equals(fromDisk));
+    });
+
+    test('rar4_binary: extractFileToMemory returns exact binary bytes', () {
+      final got = extractor.extractFileToMemory(
+          fixture('rar4_binary.rar'), 'binary.bin');
+      final expected = File(fixtureSource('binary.bin')).readAsBytesSync();
+      expect(got, equals(expected));
+    });
+
+    // -------------------------------------------------------------------------
+    // extractAllToMemory
+    // -------------------------------------------------------------------------
+
+    test('basic_rar4: extractAllToMemory returns both files', () {
+      final map = extractor.extractAllToMemory(fixture('basic_rar4.rar'));
+      expect(map.keys, containsAll(['hello.txt', 'world.txt']));
+    });
+
+    test('basic_rar4: extractAllToMemory content matches source', () {
+      final map = extractor.extractAllToMemory(fixture('basic_rar4.rar'));
+      expect(utf8.decode(map['hello.txt']!), equals(readSource('hello.txt')));
+      // world.txt contains an em dash — must decode as UTF-8
+      expect(utf8.decode(map['world.txt']!), equals(readSource('world.txt')));
+    });
+
+    test('rar4_with_dirs: extractAllToMemory skips directory entries', () {
+      final map = extractor.extractAllToMemory(fixture('rar4_with_dirs.rar'));
+      expect(map.containsKey('subdir'), isFalse);
+      expect(map.containsKey('hello.txt'), isTrue);
+      expect(map.containsKey('subdir/nested.txt'), isTrue);
+    });
+
+    test('rar4_binary: extractAllToMemory binary bytes are exact', () {
+      final map = extractor.extractAllToMemory(fixture('rar4_binary.rar'));
+      final expected = File(fixtureSource('binary.bin')).readAsBytesSync();
+      expect(map['binary.bin'], equals(expected));
+    });
+  });
 }

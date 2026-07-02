@@ -2,10 +2,10 @@
 
 ## Overview
 
-The dart_unrar package has **103 passing tests** across two test files:
+The dart_unrar package has **129 passing tests** across two test files:
 
 - **`test/unrar_ffi_test.dart`** — 15 tests (original core functionality)
-- **`test/comprehensive_test.dart`** — 88 tests (gap fixes + new features)
+- **`test/comprehensive_test.dart`** — 114 tests (gap fixes + new features + RAR4)
 
 Tests exercise all six extraction methods, archive metadata queries, password handling, multi-volume archives, and exception behavior.
 
@@ -204,6 +204,10 @@ Tests exercise all six extraction methods, archive metadata queries, password ha
 | `encrypted_headers.rar` | 1 test (header encryption) |
 | `unicode_names.rar` | 0 tests (reserved for future UTF-8 filename tests) |
 | `multi.part01..04.rar` | 8 tests (multi-volume) |
+| `basic_rar4.rar` | 15 tests (RAR4 basic two-file archive) |
+| `rar4_with_dirs.rar` | 6 tests (RAR4 with directory entry) |
+| `rar4_solid.rar` | 1 test (RAR4 solid flag in MAIN_HEAD) |
+| `rar4_binary.rar` | 6 tests (RAR4 binary data integrity) |
 
 ---
 
@@ -256,4 +260,4 @@ dart test -k "multi-volume"
 dart test -v
 ```
 
-All 103 tests pass on macOS 14.x with Dart 3.5.x and UnRAR 7.22 trial.
+All 129 tests pass on macOS 14.x with Dart 3.5.x and UnRAR 7.22.
