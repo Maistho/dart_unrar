@@ -58,6 +58,8 @@ MARKER = bytes([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00])
 
 # MAIN_HEAD flags
 MHD_SOLID = 0x0008
+MHD_COMMENT = 0x0002
+MHD_PROTECT = 0x0040
 
 def build_main_head(flags: int = 0) -> bytes:
     """
@@ -68,6 +70,21 @@ def build_main_head(flags: int = 0) -> bytes:
       uint16 Size    — total header size (7 bytes for minimal header)
     """
     body = struct.pack('<BHH', 0x73, flags, 7)
+    return struct.pack('<H', crc16(body)) + body
+
+def build_main_head_signed(pos_av: int) -> bytes:
+    """
+    Extended MAIN_HEAD (13 bytes) carrying the AV block position:
+      uint16 CRC
+      uint8  Type    0x73
+      uint16 Flags
+      uint16 Size    13
+      uint16 HighPosAV
+      uint32 PosAV
+    The C reader treats a non-zero PosAV as 'archive is signed'.
+    """
+    body = struct.pack('<BHH', 0x73, 0, 13)
+    body += struct.pack('<HI', 0, pos_av)
     return struct.pack('<H', crc16(body)) + body
 
 def build_dir_entry(dirname: str) -> bytes:
@@ -143,8 +160,10 @@ def build_end_head() -> bytes:
 
 Entry = dict  # {type: 'file'|'dir', name: str, data?: bytes}
 
-def make_rar4(entries: list, main_flags: int = 0) -> bytes:
-    parts = [MARKER, build_main_head(main_flags)]
+def make_rar4(entries: list, main_flags: int = 0,
+              main_head: bytes = None) -> bytes:
+    parts = [MARKER, main_head if main_head is not None
+             else build_main_head(main_flags)]
     for e in entries:
         if e['type'] == 'dir':
             parts.append(build_dir_entry(e['name']))
@@ -202,6 +221,21 @@ if __name__ == '__main__':
         'rar4_binary.rar': make_rar4([
             {'type': 'file', 'name': 'binary.bin', 'data': binary},
         ]),
+
+        # 5. Archive comment: MHD_COMMENT flag set in MAIN_HEAD
+        'rar4_comment.rar': make_rar4([
+            {'type': 'file', 'name': 'hello.txt', 'data': hello},
+        ], main_flags=MHD_COMMENT),
+
+        # 6. Recovery record present: MHD_PROTECT flag set in MAIN_HEAD
+        'rar4_protected.rar': make_rar4([
+            {'type': 'file', 'name': 'hello.txt', 'data': hello},
+        ], main_flags=MHD_PROTECT),
+
+        # 7. Signed archive: extended MAIN_HEAD with a non-zero PosAV
+        'rar4_signed.rar': make_rar4([
+            {'type': 'file', 'name': 'hello.txt', 'data': hello},
+        ], main_head=build_main_head_signed(pos_av=16)),
     }
 
     for name, data in archives.items():
