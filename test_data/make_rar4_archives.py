@@ -143,6 +143,57 @@ def build_file_entry(filename: str, data: bytes, flags: int = 0x0020) -> bytes:
 
     return struct.pack('<H', crc16(body)) + body + data
 
+LHD_EXTTIME = 0x1000
+
+# Fixed timestamps for the exttime fixture.
+# mtime  = FILE_TIME (used from file header)
+# ctime  = 2026-01-15 09:30:00 UTC
+# atime  = 2026-03-20 14:00:00 UTC
+CTIME_DOS = dos_datetime(2026, 1, 15, 9, 30, 0)
+ATIME_DOS = dos_datetime(2026, 3, 20, 14, 0, 0)
+
+def build_file_entry_exttime(filename: str, data: bytes) -> bytes:
+    """
+    FILE_HEAD with LHD_EXTTIME set, storing ctime and atime in addition to
+    mtime.  The extended-time block is appended after the filename inside the
+    header (before the file data).
+
+    ExtTime layout (appended after filename, within HeadSize):
+      uint16 ExtFlags   — nibble per slot: [mtime|ctime|atime|arc] * 4 bits each
+        bit 3 = present, bit 2 = add 1s, bits 1-0 = sub-second byte count
+        mtime nibble at bits 15-12, ctime at 11-8, atime at 7-4, arc at 3-0
+      (mtime: no extra DOS time — uses header FileTime)
+      uint32 CtimeDOS   — ctime as DOS datetime
+      (ctime: 0 sub-sec bytes, so no extra bytes)
+      uint32 AtimeDOS   — atime as DOS datetime
+      (atime: 0 sub-sec bytes)
+    """
+    name_bytes = filename.encode('utf-8')
+    name_size = len(name_bytes)
+
+    # ExtTime flags: mtime=0x8 (present, no sub-sec), ctime=0x8, atime=0x8,
+    # arc=0x0 (unused).  Packed as one nibble each from MSB: mtime first.
+    ext_flags = (0x8 << 12) | (0x8 << 8) | (0x8 << 4) | 0x0
+    exttime_bytes = struct.pack('<H', ext_flags)
+    exttime_bytes += struct.pack('<I', CTIME_DOS)   # ctime DOS
+    exttime_bytes += struct.pack('<I', ATIME_DOS)   # atime DOS
+
+    head_size = 32 + name_size + len(exttime_bytes)
+    pack_size = len(data)
+    unp_size  = len(data)
+    file_flags = 0x0020 | LHD_EXTTIME  # default flags + exttime
+
+    body  = struct.pack('<BHH', 0x74, file_flags, head_size)
+    body += struct.pack('<II', pack_size, unp_size)
+    body += struct.pack('<B', 3)                      # HostOS = Unix
+    body += struct.pack('<II', crc32(data), FILE_TIME)
+    body += struct.pack('<BB', 20, 0x30)              # UnpVer, Method=store
+    body += struct.pack('<HI', name_size, 0x81A4)     # NameSize, Attr
+    body += name_bytes
+    body += exttime_bytes
+
+    return struct.pack('<H', crc16(body)) + body + data
+
 def build_end_head() -> bytes:
     """
     END_HEAD (type 0x7B, 7 bytes total):
@@ -171,6 +222,13 @@ def make_rar4(entries: list, main_flags: int = 0,
             parts.append(build_file_entry(e['name'], e['data']))
     parts.append(build_end_head())
     return b''.join(parts)
+
+def make_rar4_exttime(file_data: bytes) -> bytes:
+    """RAR 4 archive with a single stored file that carries ctime + atime."""
+    return (MARKER
+            + build_main_head()
+            + build_file_entry_exttime('hello.txt', file_data)
+            + build_end_head())
 
 # ---------------------------------------------------------------------------
 # Source files
@@ -236,6 +294,9 @@ if __name__ == '__main__':
         'rar4_signed.rar': make_rar4([
             {'type': 'file', 'name': 'hello.txt', 'data': hello},
         ], main_head=build_main_head_signed(pos_av=16)),
+
+        # 8. File with LHD_EXTTIME: ctime and atime stored alongside mtime
+        'rar4_exttime.rar': make_rar4_exttime(hello),
     }
 
     for name, data in archives.items():
