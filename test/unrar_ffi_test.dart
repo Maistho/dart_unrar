@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:path/path.dart' as path;
 import 'package:test/test.dart';
 import 'package:unrar/unrar.dart';
@@ -78,6 +79,52 @@ void main() {
         throwsA(isA<UnrarException>()),
       );
     });
+
+    test('extractFileToMemory returns file contents without disk writes', () {
+      final data = extractor.extractFileToMemory(testArchivePath, 'test.txt');
+
+      expect(data, isA<Uint8List>());
+      expect(data, isNotEmpty);
+      final content = String.fromCharCodes(data);
+      expect(content, contains('test file'));
+    });
+
+    test('extractFileToMemory throws for non-existent file', () {
+      expect(
+        () => extractor.extractFileToMemory(testArchivePath, 'nonexistent.txt'),
+        throwsA(isA<UnrarException>()),
+      );
+    });
+
+    test('extractAllToMemory returns map with all entries', () {
+      final results = extractor.extractAllToMemory(testArchivePath);
+
+      expect(results, isA<Map<String, Uint8List>>());
+      expect(results.length, equals(2));
+      expect(results.keys, containsAll(['test.txt', 'file2.txt']));
+      expect(String.fromCharCodes(results['test.txt']!), contains('test file'));
+      expect(
+        String.fromCharCodes(results['file2.txt']!),
+        contains('Hello from file2'),
+      );
+    });
+
+    test('extractAllToMemory content matches extractFile per-entry', () {
+      final results = extractor.extractAllToMemory(testArchivePath);
+
+      for (final entry in results.entries) {
+        final single =
+            extractor.extractFile(testArchivePath, entry.key);
+        expect(entry.value, equals(single));
+      }
+    });
+
+    test('extractFileToMemory content matches extractFile', () {
+      final diskData = extractor.extractFile(testArchivePath, 'test.txt');
+      final memoryData =
+          extractor.extractFileToMemory(testArchivePath, 'test.txt');
+      expect(memoryData, equals(diskData));
+    });
   });
 
   group('ArchiveEntry', () {
@@ -94,7 +141,7 @@ void main() {
 
       expect(
         entry.toString(),
-        'ArchiveEntry(name: test.txt, size: 1024, isDirectory: false)',
+        'ArchiveEntry(name: test.txt, size: 1024, isDirectory: false, isEncrypted: false)',
       );
     });
   });

@@ -1,0 +1,3 @@
+This file lives inside a subdirectory.
+It tests that directory structure is preserved on extraction.
+Path: subdir/nested.txt

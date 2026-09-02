@@ -1,0 +1,4 @@
+Hello from dart_unrar test suite.
+This file is used to verify basic extraction works correctly.
+Line three of content.
+Line four for good measure.
